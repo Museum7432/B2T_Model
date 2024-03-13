@@ -69,7 +69,7 @@ class B2T_Dataset(Dataset):
 
         re = {
             "input": _input,
-            "input_block_mask": [1] * (len(_input) // block_size),
+            "input_block_padding_mask": [False] * (len(_input) // block_size),
         }
 
         if not self.has_labels:
@@ -84,9 +84,9 @@ class B2T_Dataset(Dataset):
 
 
 def collate_fn_factory(pad_token_id, pad_input, block_size):
-    fields_to_pad = ["input", "input_block_mask", "labels", "labels_mask"]
+    fields_to_pad = ["input", "input_block_padding_mask", "labels", "labels_mask"]
 
-    pad_values = [pad_input, 0, pad_token_id, 0]
+    pad_values = [pad_input, True, pad_token_id, 0]
 
     def _pad(arr, pad_value):
         target = max([len(i) for i in arr])

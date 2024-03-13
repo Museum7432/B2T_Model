@@ -233,6 +233,8 @@ class Signal_Embeddings(L.LightningModule):
 
 class B2T_Model(L.LightningModule):
     def __init__(self, input_channels=256, conv_hidden_size=768, embedding_size=512):
+        super(B2T_Model, self).__init__()
+
         self.input_channels = input_channels
         self.conv_hidden_size = conv_hidden_size
         self.embedding_size = embedding_size
@@ -244,9 +246,15 @@ class B2T_Model(L.LightningModule):
             max_block_index=511,
         )
 
+        # TODO: try relative positional embeding
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_size, nhead=8, batch_first=True)
+
+        self.encoder = nn.TransformerEncoder(encoder_layer, 3)
+
+
     def forward(self, batch):
         # batch["input"]                (batch_size, number_of_blocks*block_size, input_channels)
-        # batch["input_block_mask"]     (batch_size, number_of_blocks)
+        # batch["input_block_padding_mask"]     (batch_size, number_of_blocks)
         # batch["labels"]               (batch_size, sent_length)
         # batch["labels_mask"]          (batch_size, sent_length)
         # batch["block_size"]           int
@@ -257,3 +265,10 @@ class B2T_Model(L.LightningModule):
             _input=batch["input"],
             block_size=batch["block_size"]
         )
+
+        encoded = self.encoder(
+            src=embedding_output,
+            src_key_padding_mask=batch["input_block_padding_mask"]
+        )
+
+        return encoded
