@@ -2,7 +2,11 @@ import lightning as L
 import torch
 from torch import nn
 from torch.nn import functional as F
-
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from torchmetrics.text import WordErrorRate
+import pathlib
+from datetime import datetime
+from transformers.optimization import get_linear_schedule_with_warmup
 
 # adapted from https://github.com/helboukkouri/character-bert/blob/main/modeling/character_cnn.py
 
@@ -88,13 +92,16 @@ class CNN_block(L.LightningModule):
 
         self.bn2 = nn.BatchNorm1d(output_channels)
 
-        self.residual = nn.Conv1d(
-            in_channels=input_channels,
-            out_channels=output_channels,
-            kernel_size=1,
-            stride=1,
-            padding="same",
-        )
+        if input_channels != output_channels:
+            self.residual = nn.Conv1d(
+                in_channels=input_channels,
+                out_channels=output_channels,
+                kernel_size=1,
+                stride=1,
+                padding="same",
+            )
+        else:
+            self.residual = nn.Identity()
 
     def forward(self, _input):
         # input: (batch_size, input_channels, number_of_blocks*block_size)
@@ -153,19 +160,20 @@ class Signal_CNN(L.LightningModule):
 
         # partionning input into blocks of size block_size
         # ==> (batch_size, hidden_size, number_of_blocks, block_size)
-        convoluted = convoluted.reshape((batch_size, -1, number_of_blocks, block_size))
+        convoluted = convoluted.reshape((batch_size, self.hidden_size, number_of_blocks, block_size))
 
         # perform max pooling per block
         # TODO: we could try average pooling
         # ==> (batch_size, hidden_size, number_of_blocks)
         blocks_prep = torch.max(convoluted, dim=-1).values
+        # blocks_prep = torch.mean(convoluted, dim=-1).values
 
         # transpose input again
         # ==> (batch_size, number_of_blocks, hidden_size)
         blocks_prep = blocks_prep.transpose(1, 2)
 
         # ==> (batch_size*number_of_blocks, hidden_size)
-        blocks_prep = blocks_prep.reshape((-1, self.hidden_size))
+        blocks_prep = blocks_prep.reshape((batch_size*number_of_blocks, self.hidden_size))
 
         # DONE TODO: use highway and projection layers here to convert hidden_size into embedding_size
 
@@ -182,6 +190,8 @@ class Signal_CNN(L.LightningModule):
         return embedding
 
 
+# add absolute positional embedding to Signal_CNN
+# not needed if relative postional embedding is implemented in the encoder
 class Signal_Embeddings(L.LightningModule):
     def __init__(
         self,
@@ -211,7 +221,6 @@ class Signal_Embeddings(L.LightningModule):
         # convert input into block representation
         # ==> (batch_size, number_of_blocks, embedding_size)
 
-
         blocks_embedding = self.signal_embeddings(_input, block_size)
 
         batch_size, number_of_blocks, embedding_size = blocks_embedding.shape
@@ -233,43 +242,152 @@ class Signal_Embeddings(L.LightningModule):
 
 
 class B2T_Model(L.LightningModule):
-    def __init__(self, input_channels=256, conv_hidden_size=768, embedding_size=512):
-        super(B2T_Model, self).__init__()
+    def __init__(
+        self,
+        lr=1e-5,
+        log_dir=None,
 
+        input_channels=256,
+        conv_hidden_size=768,
+        seq2seq_model="google-t5/t5-small",
+    ):
+        super(B2T_Model, self).__init__()
         self.input_channels = input_channels
         self.conv_hidden_size = conv_hidden_size
-        self.embedding_size = embedding_size
 
-        self.embeddings = Signal_Embeddings(
+        # DONE TODO: try relative positional embeding
+        self.encoder_decoder = AutoModelForSeq2SeqLM.from_pretrained(seq2seq_model)
+
+        self.embedding_size = self.encoder_decoder.get_input_embeddings().embedding_dim
+
+        self.embeddings = Signal_CNN(
             input_channels=input_channels,
             hidden_size=conv_hidden_size,
-            embedding_size=embedding_size,
-            max_block_index=511,
+            embedding_size=self.embedding_size,
         )
 
-        # TODO: try relative positional embeding
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_size, nhead=8, batch_first=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(seq2seq_model)
 
-        self.encoder = nn.TransformerEncoder(encoder_layer, 3)
+        self.wer = WordErrorRate()
 
+        self.lr = lr
+        self.log_dir = log_dir
 
-    def forward(self, batch):
-        # batch["input"]                (batch_size, number_of_blocks*block_size, input_channels)
-        # batch["input_block_padding_mask"]     (batch_size, number_of_blocks)
-        # batch["labels"]               (batch_size, sent_length)
-        # batch["labels_mask"]          (batch_size, sent_length)
-        # batch["block_size"]           int
-
+    def forward(
+        self,
+        _input,
+        input_block_attention_mask,
+        block_size=16,
+        labels=None,
+        labels_mask=None,
+    ):
+        # _input                         (batch_size, number_of_blocks*block_size, input_channels)
+        # input_block_attention_mask              (batch_size, number_of_blocks)
+        # labels                        (batch_size, sent_length)
+        # labels_mask                   (batch_size, sent_length)
+        # block_size                    int
 
         # (batch_size, number_of_blocks, embedding_size)
-        embedding_output = self.embeddings(
+        embedding_output = self.embeddings(_input=_input, block_size=block_size)
+
+        if labels is None:
+            return self.encoder_decoder.generate(
+                inputs_embeds=embedding_output,
+                attention_mask=input_block_attention_mask,
+                max_new_tokens=30
+            )
+
+        return self.encoder_decoder(
+            inputs_embeds=embedding_output,
+            attention_mask=input_block_attention_mask,
+            labels=labels,
+        )
+
+    def training_step(self, batch):
+        loss = self(
             _input=batch["input"],
-            block_size=batch["block_size"]
+            input_block_attention_mask=batch["input_block_attention_mask"],
+            block_size=batch["block_size"],
+            labels=batch["labels"],
+            labels_mask=batch["labels_mask"],
+        ).loss
+
+        self.log("train_loss", loss.detach(), prog_bar=True)
+
+        return loss
+
+    def validation_step(self, batch):
+        res = self(
+            _input=batch["input"],
+            input_block_attention_mask=batch["input_block_attention_mask"],
+            block_size=batch["block_size"],
         )
 
-        encoded = self.encoder(
-            src=embedding_output,
-            src_key_padding_mask=batch["input_block_padding_mask"]
+        pred_sents = self.tokenizer.batch_decode(res, skip_special_tokens=True)
+
+        # batch["sent"]
+
+        w_score = self.wer(pred_sents, batch["sent"])
+
+        self.log("batch_val_wer", w_score, prog_bar=True, batch_size=len(batch["input"]))
+
+    # def on_validation_end(self):
+    #     w_score = self.wer.compute()
+    #     self.log("val_wer", w_score)
+    #     self.wer.reset()
+
+    def on_test_epoch_start(self):
+        self.test_res = []
+
+
+    @torch.no_grad()
+    def test_step(self, batch):
+        res = self(
+            _input=batch["input"],
+            input_block_attention_mask=batch["input_block_attention_mask"],
+            block_size=batch["block_size"],
+        )
+        pred_sents = self.tokenizer.batch_decode(res, skip_special_tokens=True)
+
+        self.test_res += pred_sents
+    
+    def on_test_epoch_end(self):
+        # self.global_step
+        pathlib.Path(self.log_dir, "eval").mkdir(exist_ok=True)
+
+        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        output_file = pathlib.Path(
+            self.log_dir, "eval", datetime.now().strftime("%H_%M_%S") + ".txt"
         )
 
-        return encoded
+        with open(output_file, "w") as txt_file:
+            for i in self.test_res:
+                txt_file.write(str(i) + "\n")
+
+    def num_steps(self) -> int:
+        """Get number of steps"""
+        # Accessing _data_source is flaky and might break
+        dataset = self.trainer.fit_loop._data_source.dataloader()
+        dataset_size = len(dataset)
+        num_devices = max(1, self.trainer.num_devices)
+        num_steps = (
+            dataset_size
+            * self.trainer.max_epochs
+            // (self.trainer.accumulate_grad_batches * num_devices)
+        )
+        return num_steps
+
+    def configure_optimizers(self):
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+
+        # return self.optimizer
+        num_steps = self.num_steps()
+        
+        self.lr_scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=num_steps * 0.20,
+            num_training_steps=num_steps,
+        )
+
+        return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]

@@ -52,7 +52,7 @@ class B2T_Dataset(Dataset):
             }
 
             if self.has_labels:
-                entry["sents"] = data["sentenceText"][i].strip()
+                entry["sent"] = data["sentenceText"][i].strip()
 
             entries.append(entry)
 
@@ -75,26 +75,27 @@ class B2T_Dataset(Dataset):
 
         re = {
             "input": _input,
-            "input_block_padding_mask": [False] * (len(_input) // self.block_size),
+            "input_block_attention_mask": [1] * (len(_input) // self.block_size),
         }
 
         if not self.has_labels:
             return re
 
-        tokenized = self.tokenizer(item["sents"])
+        tokenized = self.tokenizer(item["sent"])
 
         re["labels"] = tokenized["input_ids"]
         re["labels_mask"] = tokenized["attention_mask"]
+        re["sent"] = item["sent"]
 
         return re
 
 
-def collate_fn_factory(pad_token_id, block_size):
+def collate_fn_factory(label_padding, block_size):
 
-    fields_to_pad = ["input", "input_block_padding_mask", "labels", "labels_mask"]
+    fields_to_pad = ["input", "input_block_attention_mask", "labels", "labels_mask"]
 
     # only scalar is allowed
-    pad_values = [0, True, pad_token_id, 0]
+    pad_values = [0, True, label_padding, 0]
 
     def _pad(arrs, constant_values=0, pad_width_fn=lambda l: ((0, l))):
         target_length = max([len(i) for i in arrs])
@@ -137,6 +138,9 @@ def collate_fn_factory(pad_token_id, block_size):
 
         batch["block_size"] = block_size
 
+        if "sent" in items[0].keys():
+            batch["sent"] = [i["sent"] for i in items]
+
         return batch
 
     return collate_fn
@@ -177,6 +181,7 @@ class B2T_DataModule(L.LightningDataModule):
         self.train_dataset = B2T_Dataset(
             data_dir=self.train_data_dir,
             tokenizer_name=self.tokenizer_name,
+            block_size=self.block_size,
             has_labels=True,
             debugging=self.debugging,
         )
@@ -184,6 +189,7 @@ class B2T_DataModule(L.LightningDataModule):
         self.val_dataset = B2T_Dataset(
             data_dir=self.val_data_dir,
             tokenizer_name=self.tokenizer_name,
+            block_size=self.block_size,
             has_labels=True,
             debugging=self.debugging,
         )
@@ -191,18 +197,20 @@ class B2T_DataModule(L.LightningDataModule):
         self.test_dataset = B2T_Dataset(
             data_dir=self.test_data_dir,
             tokenizer_name=self.tokenizer_name,
+            block_size=self.block_size,
             has_labels=False,
             debugging=self.debugging,
         )
 
-        self.pad_token_id = self.train_dataset.tokenizer.pad_token_id
+        # only tested with T5
+        self.label_padding = -100
 
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
             batch_size=self.train_batch_size,
             collate_fn=collate_fn_factory(
-                self.pad_token_id, self.block_size
+                self.label_padding, self.block_size
             ),
             # pin_memory=True,
             shuffle=True,
@@ -214,7 +222,7 @@ class B2T_DataModule(L.LightningDataModule):
             self.val_dataset,
             batch_size=self.valid_batch_size,
             collate_fn=collate_fn_factory(
-                self.pad_token_id, self.block_size
+                self.label_padding, self.block_size
             ),
             # pin_memory=True,
             shuffle=False,
@@ -226,7 +234,7 @@ class B2T_DataModule(L.LightningDataModule):
             self.test_dataset,
             batch_size=self.valid_batch_size,
             collate_fn=collate_fn_factory(
-                self.pad_token_id, self.block_size
+                self.label_padding, self.block_size
             ),
             shuffle=False,
             num_workers=self.num_workers,
