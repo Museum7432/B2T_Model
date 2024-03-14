@@ -146,6 +146,7 @@ class Signal_CNN(L.LightningModule):
         _input = _input.transpose(1, 2)
 
         # DONE TODO: do convolution here with padding='same'
+        # differ from characterCNN, in SignalCNN embbeding, convolutions are not done per block
         # ==> (batch_size, hidden_size, number_of_blocks*block_size)
 
         convoluted = self.conv(_input)
