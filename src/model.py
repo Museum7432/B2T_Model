@@ -248,21 +248,27 @@ class B2T_Model(L.LightningModule):
         log_dir=None,
 
         input_channels=256,
-        conv_hidden_size=768,
+        conv_hidden_size=None,
         seq2seq_model="google-t5/t5-small",
     ):
         super(B2T_Model, self).__init__()
         self.input_channels = input_channels
-        self.conv_hidden_size = conv_hidden_size
 
         # DONE TODO: try relative positional embeding
         self.encoder_decoder = AutoModelForSeq2SeqLM.from_pretrained(seq2seq_model)
 
         self.embedding_size = self.encoder_decoder.get_input_embeddings().embedding_dim
 
+        if conv_hidden_size:
+            self.conv_hidden_size = conv_hidden_size
+        else:
+            self.conv_hidden_size = self.embedding_size
+
+
+
         self.embeddings = Signal_CNN(
             input_channels=input_channels,
-            hidden_size=conv_hidden_size,
+            hidden_size=self.conv_hidden_size,
             embedding_size=self.embedding_size,
         )
 
@@ -329,12 +335,12 @@ class B2T_Model(L.LightningModule):
 
         w_score = self.wer(pred_sents, batch["sent"])
 
-        self.log("batch_val_wer", w_score, prog_bar=True, batch_size=len(batch["input"]))
+        self.log("batch_val_wer", w_score, batch_size=len(batch["input"]))
 
-    # def on_validation_end(self):
-    #     w_score = self.wer.compute()
-    #     self.log("val_wer", w_score)
-    #     self.wer.reset()
+    def on_validation_epoch_end(self):
+        w_score = self.wer.compute()
+        self.log("val_wer", w_score, prog_bar=True)
+        self.wer.reset()
 
     def on_test_epoch_start(self):
         self.test_res = []

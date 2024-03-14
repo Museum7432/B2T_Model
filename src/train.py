@@ -37,7 +37,7 @@ def main(args):
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     checkpoint_callback = ModelCheckpoint(
-        monitor="train_loss",
+        monitor="val_wer",
         mode="max",
         save_top_k=2,
         save_last=True,
@@ -90,7 +90,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--seq2seq_model", type=str, default="google-t5/t5-small")
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--conv_hidden_size", type=int, default=768)
+    parser.add_argument("--conv_hidden_size", type=int, default=None)
 
     parser.add_argument("--block_size", type=int, default=16)
     

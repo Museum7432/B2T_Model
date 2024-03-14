@@ -212,7 +212,7 @@ class B2T_DataModule(L.LightningDataModule):
             collate_fn=collate_fn_factory(
                 self.label_padding, self.block_size
             ),
-            # pin_memory=True,
+            pin_memory=True,
             shuffle=True,
             num_workers=self.num_workers,
         )
@@ -224,7 +224,7 @@ class B2T_DataModule(L.LightningDataModule):
             collate_fn=collate_fn_factory(
                 self.label_padding, self.block_size
             ),
-            # pin_memory=True,
+            pin_memory=True,
             shuffle=False,
             num_workers=self.num_workers,
         )
