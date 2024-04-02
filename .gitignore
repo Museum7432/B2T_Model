@@ -1,4 +1,4 @@
-src/__pycache__
 notebooks
 dataset
 lightning_logs
+*__pycache__

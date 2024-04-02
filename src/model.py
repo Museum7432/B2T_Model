@@ -2,15 +2,30 @@ import lightning as L
 import torch
 from torch import nn
 from torch.nn import functional as F
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from torchmetrics.text import WordErrorRate
 import pathlib
 from datetime import datetime
+from dataclasses import dataclass, field
+from typing import Union
 from transformers.optimization import get_linear_schedule_with_warmup
 
-# adapted from https://github.com/helboukkouri/character-bert/blob/main/modeling/character_cnn.py
+from mamba import MambaVec2Vec, MambaConfig
 
 
+@dataclass
+class B2TConfig:
+    d_model: int = 2560
+    n_layer: int = 64
+    ssm_cfg: dict = field(default_factory=dict)
+    rms_norm: bool = True
+    residual_in_fp32: bool = True
+    fused_add_norm: bool = True
+    tie_embeddings: bool = True
+    bidirectional: bool = False
+    bidirectional_strategy: Union[str, None] = None
+
+
+# copied from https://github.com/helboukkouri/character-bert/blob/main/modeling/character_cnn.py
 class Highway(torch.nn.Module):
     """
     A [Highway layer](https://arxiv.org/abs/1505.00387) does a gated combination of a linear
@@ -65,180 +80,45 @@ class Highway(torch.nn.Module):
         return current_input
 
 
-class CNN_block(L.LightningModule):
-    def __init__(self, input_channels, output_channels):
-        super(CNN_block, self).__init__()
+class length_reduction_block(L.LightningModule):
+    def __init__(self, input_dims, output_dims=None):
+        """concatenate 2 consecutive inputs and forward through a highway network"""
+        super(length_reduction_block, self).__init__()
 
-        # TODO: try larger kernel size
-        self.conv1 = nn.Conv1d(
-            in_channels=input_channels,
-            out_channels=output_channels,
-            kernel_size=3,
-            stride=1,
-            padding="same",
-        )
+        if output_dims == None:
+            output_dims = input_dims * 2
 
-        self.bn1 = nn.BatchNorm1d(output_channels)
+        self.input_dims = input_dims
+        self.output_dims = output_dims
 
-        self.relu = nn.ReLU()
+        self._highways = Highway(input_dims * 2, 1, activation=nn.functional.relu)
 
-        self.conv2 = nn.Conv1d(
-            in_channels=output_channels,
-            out_channels=output_channels,
-            kernel_size=3,
-            stride=1,
-            padding="same",
-        )
-
-        self.bn2 = nn.BatchNorm1d(output_channels)
-
-        if input_channels != output_channels:
-            self.residual = nn.Conv1d(
-                in_channels=input_channels,
-                out_channels=output_channels,
-                kernel_size=1,
-                stride=1,
-                padding="same",
-            )
+        if input_dims * 2 != output_dims:
+            self._projection = nn.Linear(input_dims * 2, output_dims, bias=True)
         else:
-            self.residual = nn.Identity()
+            self._projection = nn.Identity()
 
-    def forward(self, _input):
-        # input: (batch_size, input_channels, number_of_blocks*block_size)
+    def forward(self, hidden_states):
+        # hidden_states  (batch_size, seq_len, input_dims)
+        # output         (batch_size, seq_len//2, input_dims*2)
+        batch_size, seq_len, input_dims = hidden_states.shape
+        assert input_dims == self.input_dims
+        assert seq_len % 2 == 0
 
-        # ==> (batch_size, output_channels, number_of_blocks*block_size)
-        residual_part = self.residual(_input)
-
-        out = self.conv1(_input)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        out += residual_part
-
-        out = self.relu(out)
-
-        return out
-
-
-class Signal_CNN(L.LightningModule):
-    def __init__(self, input_channels=256, hidden_size=768, embedding_size=512):
-        super(Signal_CNN, self).__init__()
-
-        self.embedding_size = embedding_size
-        self.input_channels = input_channels
-        self.hidden_size = hidden_size
-
-        self.conv = nn.Sequential(
-            CNN_block(input_channels, hidden_size),
-            CNN_block(hidden_size, hidden_size),
-            CNN_block(hidden_size, hidden_size),
+        # (batch_size, seq_len//2, input_dims*2)
+        hidden_states = hidden_states.reshape(
+            (batch_size, seq_len // 2, input_dims * 2)
         )
 
-        self._highways = Highway(hidden_size, 2, activation=nn.functional.relu)
-        self._projection = torch.nn.Linear(hidden_size, embedding_size, bias=True)
+        # (batch_size, seq_len//2, input_dims*2)
+        hidden_states = self._highways(hidden_states)
 
-    def forward(self, _input, block_size):
-        # _input  (batch_size, number_of_blocks*block_size, input_channels)
-        # output (batch_size, number_of_blocks, embedding_size)
+        # (batch_size, seq_len//2, output_dims)
+        hidden_states = self._projection(hidden_states)
 
-        batch_size, seq_length, input_channels = _input.shape
+        # TODO: add normalization
 
-        number_of_blocks = seq_length // block_size
-
-        # transpose input for convolution
-        # ==> (batch_size, input_channels, number_of_blocks*block_size)
-        _input = _input.transpose(1, 2)
-
-        # DONE TODO: do convolution here with padding='same'
-        # differ from characterCNN, in SignalCNN embbeding, convolutions are not done per block
-        # ==> (batch_size, hidden_size, number_of_blocks*block_size)
-
-        convoluted = self.conv(_input)
-
-        # partionning input into blocks of size block_size
-        # ==> (batch_size, hidden_size, number_of_blocks, block_size)
-        convoluted = convoluted.reshape((batch_size, self.hidden_size, number_of_blocks, block_size))
-
-        # perform max pooling per block
-        # TODO: we could try average pooling
-        # ==> (batch_size, hidden_size, number_of_blocks)
-        blocks_prep = torch.max(convoluted, dim=-1).values
-        # blocks_prep = torch.mean(convoluted, dim=-1).values
-
-        # transpose input again
-        # ==> (batch_size, number_of_blocks, hidden_size)
-        blocks_prep = blocks_prep.transpose(1, 2)
-
-        # ==> (batch_size*number_of_blocks, hidden_size)
-        blocks_prep = blocks_prep.reshape((batch_size*number_of_blocks, self.hidden_size))
-
-        # DONE TODO: use highway and projection layers here to convert hidden_size into embedding_size
-
-        blocks_prep = self._highways(blocks_prep)
-
-        # ==> (batch_size*number_of_blocks, embedding_size)
-        embedding = self._projection(blocks_prep)
-
-        # ==> (batch_size, number_of_blocks, embedding_size)
-        embedding = embedding.reshape(
-            (batch_size, number_of_blocks, self.embedding_size)
-        )
-
-        return embedding
-
-
-# add absolute positional embedding to Signal_CNN
-# not needed if relative postional embedding is implemented in the encoder
-class Signal_Embeddings(L.LightningModule):
-    def __init__(
-        self,
-        input_channels=256,
-        hidden_size=768,
-        embedding_size=512,
-        max_block_index=511,
-    ):
-        super(Signal_Embeddings, self).__init__()
-
-        self.embedding_size = embedding_size
-        self.input_channels = input_channels
-        self.hidden_size = hidden_size
-
-        self.signal_embeddings = Signal_CNN(
-            input_channels=input_channels,
-            hidden_size=hidden_size,
-            embedding_size=embedding_size,
-        )
-        # TODO: we should try relative positional embedding
-        self.position_embeddings = nn.Embedding(max_block_index, embedding_size)
-        self.LayerNorm = nn.LayerNorm(embedding_size, eps=1e-12)
-        self.dropout = nn.Dropout(0.1)
-
-    def forward(self, _input, block_size):
-        # _input  (batch_size, number_of_blocks*block_size, input_channels)
-        # convert input into block representation
-        # ==> (batch_size, number_of_blocks, embedding_size)
-
-        blocks_embedding = self.signal_embeddings(_input, block_size)
-
-        batch_size, number_of_blocks, embedding_size = blocks_embedding.shape
-
-        position_ids = (
-            torch.arange(number_of_blocks)
-            .unsqueeze(0)
-            .expand_as(blocks_embedding[:, :, 0])
-        )
-
-        position_embeddings = self.position_embeddings(position_ids)
-
-        embeddings = blocks_embedding + position_embeddings
-
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-
-        return embeddings
+        return hidden_states
 
 
 class B2T_Model(L.LightningModule):
@@ -246,35 +126,59 @@ class B2T_Model(L.LightningModule):
         self,
         lr=1e-5,
         log_dir=None,
-
+        vocab_size=150,
         input_channels=256,
-        conv_hidden_size=None,
-        seq2seq_model="google-t5/t5-small",
     ):
         super(B2T_Model, self).__init__()
         self.input_channels = input_channels
 
-        # DONE TODO: try relative positional embeding
-        self.encoder_decoder = AutoModelForSeq2SeqLM.from_pretrained(seq2seq_model)
+        # config = MambaConfig(
+        #     d_model=input_channels,
+        #     n_layer=6,
+        #     bidirectional=True,
+        # )
 
-        self.embedding_size = self.encoder_decoder.get_input_embeddings().embedding_dim
+        # self.encoder = MambaVec2Vec(config=config)
 
-        if conv_hidden_size:
-            self.conv_hidden_size = conv_hidden_size
-        else:
-            self.conv_hidden_size = self.embedding_size
-
-
-
-        self.embeddings = Signal_CNN(
-            input_channels=input_channels,
-            hidden_size=self.conv_hidden_size,
-            embedding_size=self.embedding_size,
+        self.encoder = nn.Sequential(
+            # (batch_size, seq_len, input_dims)
+            MambaVec2Vec(
+                MambaConfig(
+                    d_model=input_channels,
+                    n_layer=2,
+                    bidirectional=True,
+                )
+            ),
+            # (batch_size, seq_len//2, input_dims*2)
+            length_reduction_block(input_dims=input_channels),
+            MambaVec2Vec(
+                MambaConfig(
+                    d_model=input_channels * 2,
+                    n_layer=2,
+                    bidirectional=True,
+                )
+            ),
+            # (batch_size, seq_len//4, input_dims*2)
+            length_reduction_block(input_dims=input_channels * 2, output_dims=input_channels*2),
+            MambaVec2Vec(
+                MambaConfig(
+                    d_model=input_channels * 2,
+                    n_layer=2,
+                    bidirectional=True,
+                )
+            ),
+            # (batch_size, seq_len//8, input_dims*2)
+            length_reduction_block(input_dims=input_channels * 2, output_dims=input_channels * 2),
+            MambaVec2Vec(
+                MambaConfig(
+                    d_model=input_channels * 2,
+                    n_layer=2,
+                    bidirectional=True,
+                )
+            ),
         )
 
-        self.tokenizer = AutoTokenizer.from_pretrained(seq2seq_model)
-
-        self.wer = WordErrorRate()
+        self.linear = nn.Linear(input_channels * 2, vocab_size)
 
         self.lr = lr
         self.log_dir = log_dir
@@ -282,10 +186,7 @@ class B2T_Model(L.LightningModule):
     def forward(
         self,
         _input,
-        input_block_attention_mask,
-        block_size=16,
-        labels=None,
-        labels_mask=None,
+        input_cu_seqlens,
     ):
         # _input                         (batch_size, number_of_blocks*block_size, input_channels)
         # input_block_attention_mask              (batch_size, number_of_blocks)
@@ -293,30 +194,30 @@ class B2T_Model(L.LightningModule):
         # labels_mask                   (batch_size, sent_length)
         # block_size                    int
 
-        # (batch_size, number_of_blocks, embedding_size)
-        embedding_output = self.embeddings(_input=_input, block_size=block_size)
-
-        if labels is None:
-            return self.encoder_decoder.generate(
-                inputs_embeds=embedding_output,
-                attention_mask=input_block_attention_mask,
-                max_new_tokens=30
-            )
-
-        return self.encoder_decoder(
-            inputs_embeds=embedding_output,
-            attention_mask=input_block_attention_mask,
-            labels=labels,
+        hidden_states = self.encoder(
+            _input,
+            # cu_seqlens=input_cu_seqlens
         )
 
+        res = self.linear(hidden_states)
+
+        return res.log_softmax(-1)
+
     def training_step(self, batch):
-        loss = self(
+
+        res = self(
             _input=batch["input"],
-            input_block_attention_mask=batch["input_block_attention_mask"],
-            block_size=batch["block_size"],
-            labels=batch["labels"],
-            labels_mask=batch["labels_mask"],
-        ).loss
+            input_cu_seqlens=batch["input_cu_seqlens"],
+        )
+
+        batch["input_cu_seqlens"] = batch["input_cu_seqlens"] // 8
+
+        loss = F.ctc_loss(
+            res.transpose(0, 1),
+            batch["labels"],
+            batch["input_cu_seqlens"],
+            batch["labels_len"],
+        )
 
         self.log("train_loss", loss.detach(), prog_bar=True)
 
@@ -325,51 +226,19 @@ class B2T_Model(L.LightningModule):
     def validation_step(self, batch):
         res = self(
             _input=batch["input"],
-            input_block_attention_mask=batch["input_block_attention_mask"],
-            block_size=batch["block_size"],
+            input_cu_seqlens=batch["input_cu_seqlens"],
         )
 
-        pred_sents = self.tokenizer.batch_decode(res, skip_special_tokens=True)
+        batch["input_cu_seqlens"] = batch["input_cu_seqlens"] // 8
 
-        # batch["sent"]
-
-        w_score = self.wer(pred_sents, batch["sent"])
-
-        self.log("batch_val_wer", w_score, batch_size=len(batch["input"]))
-
-    def on_validation_epoch_end(self):
-        w_score = self.wer.compute()
-        self.log("val_wer", w_score, prog_bar=True)
-        self.wer.reset()
-
-    def on_test_epoch_start(self):
-        self.test_res = []
-
-
-    @torch.no_grad()
-    def test_step(self, batch):
-        res = self(
-            _input=batch["input"],
-            input_block_attention_mask=batch["input_block_attention_mask"],
-            block_size=batch["block_size"],
-        )
-        pred_sents = self.tokenizer.batch_decode(res, skip_special_tokens=True)
-
-        self.test_res += pred_sents
-    
-    def on_test_epoch_end(self):
-        # self.global_step
-        pathlib.Path(self.log_dir, "eval").mkdir(exist_ok=True)
-
-        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-        output_file = pathlib.Path(
-            self.log_dir, "eval", datetime.now().strftime("%H_%M_%S") + ".txt"
+        loss = F.ctc_loss(
+            res.transpose(0, 1),
+            batch["labels"],
+            batch["input_cu_seqlens"],
+            batch["labels_len"],
         )
 
-        with open(output_file, "w") as txt_file:
-            for i in self.test_res:
-                txt_file.write(str(i) + "\n")
+        self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
 
     def num_steps(self) -> int:
         """Get number of steps"""
@@ -389,7 +258,7 @@ class B2T_Model(L.LightningModule):
 
         # return self.optimizer
         num_steps = self.num_steps()
-        
+
         self.lr_scheduler = get_linear_schedule_with_warmup(
             self.optimizer,
             num_warmup_steps=num_steps * 0.20,

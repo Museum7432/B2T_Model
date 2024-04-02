@@ -11,14 +11,15 @@ import torch
 def main(args):
     L.seed_everything(69, workers=True)
 
+    torch.autograd.set_detect_anomaly(True)
+
     torch.set_float32_matmul_precision(args.float32_matmul_precision)
 
     data_module = B2T_DataModule(
         train_data_dir=args.train_data_dir,
         val_data_dir=args.val_data_dir,
         test_data_dir=args.test_data_dir,
-        block_size=args.block_size,
-        tokenizer_name=args.seq2seq_model,
+        # tokenizer_name=args.seq2seq_model,
         train_batch_size = args.train_batch_size,
         valid_batch_size= args.valid_batch_size,
         num_workers = args.num_workers,
@@ -37,8 +38,8 @@ def main(args):
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_wer",
-        mode="max",
+        monitor="valid_loss",
+        mode="min",
         save_top_k=2,
         save_last=True,
         save_weights_only=True,
@@ -63,13 +64,12 @@ def main(args):
         lr=args.lr,
         log_dir=log_dir,
         input_channels=256,
-        conv_hidden_size=args.conv_hidden_size,
-        seq2seq_model=args.seq2seq_model,
+        vocab_size = 150
     )
 
     trainer.fit(model, datamodule=data_module)
 
-    trainer.test(model, datamodule=data_module)
+    # trainer.test(model, datamodule=data_module)
 
     # trainer.test(ckpt_path="best", datamodule=data_module)
 

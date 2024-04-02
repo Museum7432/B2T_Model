@@ -11,14 +11,13 @@ class B2T_Dataset(Dataset):
     def __init__(
         self,
         data_dir,
-        tokenizer_name,
-        block_size=16,
+        tokenizer_name="notebooks/new_tokenizer",
         has_labels=True,
         debugging=False,
     ):
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name, model_max_length=512
+            'notebooks/new_tokenizer', model_max_length=512
         )
 
         self.has_labels = has_labels
@@ -35,9 +34,7 @@ class B2T_Dataset(Dataset):
             e for fpath in data_file_paths for e in self._process_raw(fpath)
         ]
 
-        self.block_size = block_size
-
-        input_channels = len(self.entries[0]["input"][0])
+        self.input_channels = len(self.entries[0]["input"][0])
 
     def _process_raw(self, data_files_path):
         data = sio.loadmat(data_files_path)
@@ -54,6 +51,8 @@ class B2T_Dataset(Dataset):
             if self.has_labels:
                 entry["sent"] = data["sentenceText"][i].strip()
 
+                assert len(entry["input"]) > len(entry["sent"])
+
             entries.append(entry)
 
         return entries
@@ -66,36 +65,44 @@ class B2T_Dataset(Dataset):
 
         _input = item["input"]
 
-        # pad _input to a multiple of block_size
-        if len(_input) % self.block_size != 0:
-            pad_width = self.block_size - len(_input) % self.block_size
+        # pad _input to a multiple of 8
+        if len(_input) % 8 != 0:
+            pad_width = 8 - len(_input) % 8
+
+            _start = np.random.randint(pad_width + 1)
+
+            _end = pad_width - _start
+
             _input = np.pad(
-                _input, ((0, pad_width), (0, 0)), "constant", constant_values=0
+                _input, ((_start, _end), (0, 0)), "constant", constant_values=0
             )
 
         re = {
             "input": _input,
-            "input_block_attention_mask": [1] * (len(_input) // self.block_size),
+            "input_cu_seqlens": len(_input),
         }
 
         if not self.has_labels:
             return re
 
-        tokenized = self.tokenizer(item["sent"])
+        tokenized = self.tokenizer.encode(item["sent"], add_special_tokens=False)
 
-        re["labels"] = tokenized["input_ids"]
-        re["labels_mask"] = tokenized["attention_mask"]
+        re["labels"] = tokenized
+        re["labels_len"] = len(tokenized)
+        # re["labels_mask"] = tokenized["attention_mask"]
         re["sent"] = item["sent"]
 
         return re
 
 
-def collate_fn_factory(label_padding, block_size):
+def collate_fn_factory(label_padding):
 
-    fields_to_pad = ["input", "input_block_attention_mask", "labels", "labels_mask"]
+    batch_fields = ["input", "input_cu_seqlens", "labels", "labels_len"]
+
+    fields_to_pad = ["input", "labels"]
 
     # only scalar is allowed
-    pad_values = [0, True, label_padding, 0]
+    pad_values = [0, 0, 0, 0]
 
     def _pad(arrs, constant_values=0, pad_width_fn=lambda l: ((0, l))):
         target_length = max([len(i) for i in arrs])
@@ -117,7 +124,7 @@ def collate_fn_factory(label_padding, block_size):
 
         batch = {}
 
-        for f in fields_to_pad:
+        for f in batch_fields:
             if f in items[0].keys():
                 batch[f] = [i[f] for i in items]
 
@@ -132,12 +139,10 @@ def collate_fn_factory(label_padding, block_size):
                 else:
                     batch[f] = _pad(batch[f], constant_values=v)
 
-        for f in fields_to_pad:
+        for f in batch_fields:
             if f in batch.keys():
-                batch[f] = torch.from_numpy(batch[f])
-
-        batch["block_size"] = block_size
-
+                batch[f] = torch.tensor(batch[f])
+        
         if "sent" in items[0].keys():
             batch["sent"] = [i["sent"] for i in items]
 
@@ -152,7 +157,6 @@ class B2T_DataModule(L.LightningDataModule):
         train_data_dir,
         val_data_dir,
         test_data_dir,
-        block_size=16,
         tokenizer_name="google-t5/t5-base",
         train_batch_size: int = 2,
         valid_batch_size: int = 4,
@@ -174,14 +178,11 @@ class B2T_DataModule(L.LightningDataModule):
 
         self.debugging = debugging
 
-        self.block_size = block_size
-
     def setup(self, stage: str):
 
         self.train_dataset = B2T_Dataset(
             data_dir=self.train_data_dir,
             tokenizer_name=self.tokenizer_name,
-            block_size=self.block_size,
             has_labels=True,
             debugging=self.debugging,
         )
@@ -189,7 +190,6 @@ class B2T_DataModule(L.LightningDataModule):
         self.val_dataset = B2T_Dataset(
             data_dir=self.val_data_dir,
             tokenizer_name=self.tokenizer_name,
-            block_size=self.block_size,
             has_labels=True,
             debugging=self.debugging,
         )
@@ -197,7 +197,6 @@ class B2T_DataModule(L.LightningDataModule):
         self.test_dataset = B2T_Dataset(
             data_dir=self.test_data_dir,
             tokenizer_name=self.tokenizer_name,
-            block_size=self.block_size,
             has_labels=False,
             debugging=self.debugging,
         )
@@ -210,7 +209,7 @@ class B2T_DataModule(L.LightningDataModule):
             self.train_dataset,
             batch_size=self.train_batch_size,
             collate_fn=collate_fn_factory(
-                self.label_padding, self.block_size
+                self.label_padding
             ),
             pin_memory=True,
             shuffle=True,
@@ -222,7 +221,7 @@ class B2T_DataModule(L.LightningDataModule):
             self.val_dataset,
             batch_size=self.valid_batch_size,
             collate_fn=collate_fn_factory(
-                self.label_padding, self.block_size
+                self.label_padding
             ),
             pin_memory=True,
             shuffle=False,
@@ -234,7 +233,7 @@ class B2T_DataModule(L.LightningDataModule):
             self.test_dataset,
             batch_size=self.valid_batch_size,
             collate_fn=collate_fn_factory(
-                self.label_padding, self.block_size
+                self.label_padding
             ),
             shuffle=False,
             num_workers=self.num_workers,
