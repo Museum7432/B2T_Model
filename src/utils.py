@@ -1,6 +1,7 @@
 import numpy as np
 from phonemizer import phonemize
 from phonemizer.separator import Separator
+import itertools
 
 
 # require "festival" to be installed
@@ -53,10 +54,14 @@ def phonetic_tokenize(text):
     # n uw k l iy er | r aa k ax t s
     text = flatten([c.split("-") for c in text])
 
-    text = ["|"] + text
+    text = ["_"] + text
 
     return [phoneme_vocab.index(c) for c in text]
 
+def phonetic_decode(ids, remove_consecutive=False):
+    if remove_consecutive:
+        ids = [i for i, _ in itertools.groupby(ids)]
+    return "".join([phoneme_vocab[i] for i in ids])
 
 # for text generation
 vocab = "#nuclear oktsdyifwhbvxpm'gqjz"

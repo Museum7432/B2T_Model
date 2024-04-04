@@ -13,6 +13,9 @@ from transformers.optimization import get_linear_schedule_with_warmup
 from .mamba import MambaFeatureExtractor, MambaConfig
 from omegaconf import DictConfig
 
+from .utils import phonetic_decode
+import numpy as np 
+
 
 # copied from https://github.com/helboukkouri/character-bert/blob/main/modeling/character_cnn.py
 class Highway(torch.nn.Module):
@@ -282,7 +285,7 @@ class B2T_encoder(L.LightningModule):
         return hidden_states
 
 
-class BasedModel(L.LightningModule):
+class BaseModel(L.LightningModule):
     def num_steps(self) -> int:
         """Get number of steps"""
         # Accessing _data_source is flaky and might break
@@ -343,7 +346,7 @@ class BasedModel(L.LightningModule):
         return [self.optimizer], [lr_scheduler]
 
 
-class B2T_Phonemes_CTC(BasedModel):
+class B2T_Phonemes_CTC(BaseModel):
     def __init__(self, config: DictConfig):
         super(B2T_Phonemes_CTC, self).__init__()
         self.save_hyperparameters()
@@ -386,6 +389,10 @@ class B2T_Phonemes_CTC(BasedModel):
 
         return loss
 
+    def on_validation_epoch_start(self):
+        self.val_pred = []
+        self.val_tar = []
+
     def validation_step(self, batch):
         res = self(
             _input=batch["input"],
@@ -402,3 +409,40 @@ class B2T_Phonemes_CTC(BasedModel):
         )
 
         self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
+
+        self.val_pred += res.argmax(dim=-1).cpu().tolist()
+
+        self.val_tar += batch["phonemized"]
+    
+    def on_validation_epoch_end(self):
+
+        raw_pred = [phonetic_decode(s) for s in self.val_pred]
+        pred = [phonetic_decode(s, True) for s in self.val_pred]
+
+        with open("valid.txt", "w") as txt_file:
+            for i in range(len(self.val_pred)):
+                txt_file.write(f"{raw_pred[i]}\n{pred[i]}\n{self.val_tar[i]}\n\n")
+        self.val_pred = []
+        self.val_tar = []
+
+
+    def on_test_epoch_start(self):
+        self.test_pred = []
+
+    def test_step(self, batch):
+        res = self(
+            _input=batch["input"],
+            input_len=batch["input_len"],
+        )
+
+        self.test_pred += res.argmax(dim=-1).cpu().tolist()
+
+    def on_test_epoch_end(self):
+
+        raw_pred = [phonetic_decode(s) for s in self.test_pred]
+        pred = [phonetic_decode(s, True) for s in self.test_pred]
+
+        with open("test.txt", "w") as txt_file:
+            for i in range(len(self.test_pred)):
+                txt_file.write(f"{raw_pred[i]}\n{pred[i]}\n\n")
+        self.test_pred = []

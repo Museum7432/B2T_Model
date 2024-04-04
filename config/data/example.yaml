@@ -3,9 +3,9 @@
 # input_length_multiplier must be divisible by input_reduction_ratio
 input_length_multiplier: 12
 
-train_data_dir: "competitionData/train"
-val_data_dir: "competitionData/test"
-test_data_dir: "competitionData/competitionHoldOut"
+train_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/train"
+val_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/test"
+test_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/competitionHoldOut"
 train_batch_size: 4
 valid_batch_size: 4
 num_workers: 8
