@@ -1,4 +1,5 @@
 import lightning as L
+import math
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -9,20 +10,8 @@ from dataclasses import dataclass, field
 from typing import Union
 from transformers.optimization import get_linear_schedule_with_warmup
 
-from mamba import MambaVec2Vec, MambaConfig
-
-
-@dataclass
-class B2TConfig:
-    d_model: int = 2560
-    n_layer: int = 64
-    ssm_cfg: dict = field(default_factory=dict)
-    rms_norm: bool = True
-    residual_in_fp32: bool = True
-    fused_add_norm: bool = True
-    tie_embeddings: bool = True
-    bidirectional: bool = False
-    bidirectional_strategy: Union[str, None] = None
+from .mamba import MambaFeatureExtractor, MambaConfig
+from omegaconf import DictConfig
 
 
 # copied from https://github.com/helboukkouri/character-bert/blob/main/modeling/character_cnn.py
@@ -80,166 +69,220 @@ class Highway(torch.nn.Module):
         return current_input
 
 
-class length_reduction_block(L.LightningModule):
-    def __init__(self, input_dims, output_dims=None):
-        """concatenate 2 consecutive inputs and forward through a highway network"""
-        super(length_reduction_block, self).__init__()
+class consecutive_pooling(nn.Module):
+    def __init__(self, pooling_type="max", group_size=2):
+        """perform pooling over group_size consecutive inputs"""
+        super(consecutive_pooling, self).__init__()
+        self.pooling_type = pooling_type
+        self.group_size = group_size
 
-        if output_dims == None:
-            output_dims = input_dims * 2
+        assert pooling_type in ["max", "mean", "min"]
 
+    def forward(self, hidden_states):
+        # hidden_states  (batch_size, seq_len, input_dims)
+        batch_size, seq_len, input_dims = hidden_states.shape
+        assert seq_len % self.group_size == 0
+
+        # (batch_size, seq_len//group_size, group_size, input_dims)
+        hidden_states = hidden_states.reshape(
+            (batch_size, seq_len // self.group_size, self.group_size, input_dims)
+        )
+
+        # (batch_size, seq_len//2, input_dims, 2)
+        hidden_states = hidden_states.transpose(2, 3)
+
+        # (batch_size, seq_len//2, input_dims)
+        if self.pooling_type == "max":
+            hidden_states = hidden_states.max(-1).values
+        elif self.pooling_type == "min":
+            hidden_states = hidden_states.min(-1).values
+        else:
+            hidden_states = hidden_states.mean(-1)
+
+        return hidden_states
+
+
+class concatenate_consecutive(nn.Module):
+    def __init__(self, input_dims, output_dims=None, group_size=2):
+        """concatenate group_size consecutive inputs and forward through a highway network"""
+        super(concatenate_consecutive, self).__init__()
+
+        self.group_size = group_size
         self.input_dims = input_dims
         self.output_dims = output_dims
 
-        self._highways = Highway(input_dims * 2, 1, activation=nn.functional.relu)
+        if output_dims == None:
+            output_dims = input_dims * group_size
 
-        if input_dims * 2 != output_dims:
-            self._projection = nn.Linear(input_dims * 2, output_dims, bias=True)
+        self._highways = Highway(
+            input_dims * group_size, 2, activation=nn.functional.relu
+        )
+
+        if input_dims * group_size != output_dims:
+            self._projection = nn.Linear(
+                input_dims * group_size, output_dims, bias=True
+            )
         else:
             self._projection = nn.Identity()
 
     def forward(self, hidden_states):
         # hidden_states  (batch_size, seq_len, input_dims)
-        # output         (batch_size, seq_len//2, input_dims*2)
+
         batch_size, seq_len, input_dims = hidden_states.shape
         assert input_dims == self.input_dims
-        assert seq_len % 2 == 0
+        assert seq_len % self.group_size == 0
 
-        # (batch_size, seq_len//2, input_dims*2)
+        # (batch_size, seq_len//group_size, input_dims*group_size)
         hidden_states = hidden_states.reshape(
-            (batch_size, seq_len // 2, input_dims * 2)
+            (batch_size, seq_len // self.group_size, input_dims * self.group_size)
         )
 
-        # (batch_size, seq_len//2, input_dims*2)
+        # (batch_size, seq_len//group_size, input_dims*group_size)
         hidden_states = self._highways(hidden_states)
 
-        # (batch_size, seq_len//2, output_dims)
+        # (batch_size, seq_len//group_size, output_dims)
         hidden_states = self._projection(hidden_states)
-
-        # TODO: add normalization
 
         return hidden_states
 
 
-class B2T_Model(L.LightningModule):
-    def __init__(
-        self,
-        lr=1e-5,
-        log_dir=None,
-        vocab_size=150,
-        input_channels=256,
-    ):
-        super(B2T_Model, self).__init__()
-        self.input_channels = input_channels
+class convolutional_block(nn.Module):
+    def __init__(self, input_dims, output_dims=None, stride=2):
+        super(convolutional_block, self).__init__()
+        # convolution block have a constant stride of 2
+        if output_dims is None:
+            output_dims = input_dims
+        
+        self.input_dims = input_dims
+        self.output_dims = output_dims
+        self.stride = stride
 
-        # config = MambaConfig(
-        #     d_model=input_channels,
-        #     n_layer=6,
-        #     bidirectional=True,
+        # self.conv1 = nn.Conv1d(
+        #     in_channels=input_dims,
+        #     out_channels=output_dims,
+        #     kernel_size=4,
+        #     padding_mode="replicate",
+        #     padding=(1, 2),
+        #     stride=stride,
         # )
 
-        # self.encoder = MambaVec2Vec(config=config)
-
-        self.encoder = nn.Sequential(
-            # (batch_size, seq_len, input_dims)
-            MambaVec2Vec(
-                MambaConfig(
-                    d_model=input_channels,
-                    n_layer=2,
-                    bidirectional=True,
-                )
-            ),
-            # (batch_size, seq_len//2, input_dims*2)
-            length_reduction_block(input_dims=input_channels),
-            MambaVec2Vec(
-                MambaConfig(
-                    d_model=input_channels * 2,
-                    n_layer=2,
-                    bidirectional=True,
-                )
-            ),
-            # (batch_size, seq_len//4, input_dims*2)
-            length_reduction_block(input_dims=input_channels * 2, output_dims=input_channels*2),
-            MambaVec2Vec(
-                MambaConfig(
-                    d_model=input_channels * 2,
-                    n_layer=2,
-                    bidirectional=True,
-                )
-            ),
-            # (batch_size, seq_len//8, input_dims*2)
-            length_reduction_block(input_dims=input_channels * 2, output_dims=input_channels * 2),
-            MambaVec2Vec(
-                MambaConfig(
-                    d_model=input_channels * 2,
-                    n_layer=2,
-                    bidirectional=True,
-                )
-            ),
+        self.conv1 = nn.Conv1d(
+            in_channels=input_dims,
+            out_channels=output_dims,
+            kernel_size=3,
+            padding_mode="replicate",
+            padding=1,
+            stride=stride,
         )
 
-        self.linear = nn.Linear(input_channels * 2, vocab_size)
+        self.bn1 = nn.BatchNorm1d(output_dims)
 
-        self.lr = lr
-        self.log_dir = log_dir
+        self.relu = nn.ReLU()
 
-    def forward(
-        self,
-        _input,
-        input_cu_seqlens,
-    ):
-        # _input                         (batch_size, number_of_blocks*block_size, input_channels)
-        # input_block_attention_mask              (batch_size, number_of_blocks)
-        # labels                        (batch_size, sent_length)
-        # labels_mask                   (batch_size, sent_length)
-        # block_size                    int
+        self.conv2 = nn.Conv1d(
+            in_channels=output_dims,
+            out_channels=output_dims,
+            kernel_size=3,
+            padding_mode="replicate",
+            padding=1,
+            stride=1,
+        )
 
-        hidden_states = self.encoder(
+        self.bn2 = nn.BatchNorm1d(output_dims)
+
+        if input_dims != output_dims:
+            self.residual = nn.Conv1d(
+                in_channels=input_dims,
+                out_channels=output_dims,
+                kernel_size=1,
+                stride=stride,
+                padding=0,
+            )
+        else:
+            self.residual = nn.MaxPool1d(kernel_size=1, stride=stride)
+
+    def forward(self, hidden_states):
+        # hidden_states  (batch_size, seq_len, input_dims)
+
+        # transpose input for convolution
+        hidden_states = hidden_states.transpose(1, 2)
+
+        residual_part = self.residual(hidden_states)
+
+        out = self.conv1(hidden_states)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += residual_part
+
+        convoluted = self.relu(out + residual_part)
+
+        return convoluted.transpose(1, 2)
+
+
+class B2T_encoder(L.LightningModule):
+    def __init__(self, config):
+        super(B2T_encoder, self).__init__()
+        # config.encoder.layers example
+        # [
+        #   ["mamba", 256, 2, True],  # input_channels, n_layer, bidirectional
+        #   ["concat", 256, 512, 2],  # input_dims, output_dims, group_size
+        #   ["pooling", "max", 2],  # pooling_type, group_size
+        # ]
+
+        modules_list = []
+
+        for l in config.encoder.layers:
+            if l[0] == "mamba":
+                _, in_channels, n_layer, bidirectional = l
+                modules_list.append(
+                    MambaFeatureExtractor(
+                        MambaConfig(
+                            d_model=in_channels,
+                            n_layer=n_layer,
+                            bidirectional=bidirectional,
+                        )
+                    )
+                )
+            elif l[0] == "concat":
+                _, in_dims, out_dims, group_size = l
+
+                modules_list.append(
+                    concatenate_consecutive(
+                        input_dims=in_dims, output_dims=out_dims, group_size=group_size
+                    )
+                )
+            elif l[0] == "pooling":
+                _, pooling_type, group_size = l
+
+                modules_list.append(
+                    consecutive_pooling(
+                        pooling_type=pooling_type, group_size=group_size
+                    )
+                )
+            elif l[0] == "conv":
+                _, in_dims, out_dims, stride = l
+                modules_list.append(
+                    convolutional_block(input_dims=in_dims, output_dims=out_dims, stride=stride)
+                )
+            else:
+                raise ValueError(f"unknown layer: {l[0]}")
+
+        self.layers = nn.Sequential(*modules_list)
+
+    def forward(self, _input, input_len=None):
+        hidden_states = self.layers(
             _input,
-            # cu_seqlens=input_cu_seqlens
+            # cu_seqlens=input_len
         )
+        # cu_seqlens is not available in mamba yet
+        return hidden_states
 
-        res = self.linear(hidden_states)
 
-        return res.log_softmax(-1)
-
-    def training_step(self, batch):
-
-        res = self(
-            _input=batch["input"],
-            input_cu_seqlens=batch["input_cu_seqlens"],
-        )
-
-        batch["input_cu_seqlens"] = batch["input_cu_seqlens"] // 8
-
-        loss = F.ctc_loss(
-            res.transpose(0, 1),
-            batch["labels"],
-            batch["input_cu_seqlens"],
-            batch["labels_len"],
-        )
-
-        self.log("train_loss", loss.detach(), prog_bar=True)
-
-        return loss
-
-    def validation_step(self, batch):
-        res = self(
-            _input=batch["input"],
-            input_cu_seqlens=batch["input_cu_seqlens"],
-        )
-
-        batch["input_cu_seqlens"] = batch["input_cu_seqlens"] // 8
-
-        loss = F.ctc_loss(
-            res.transpose(0, 1),
-            batch["labels"],
-            batch["input_cu_seqlens"],
-            batch["labels_len"],
-        )
-
-        self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
-
+class BasedModel(L.LightningModule):
     def num_steps(self) -> int:
         """Get number of steps"""
         # Accessing _data_source is flaky and might break
@@ -254,15 +297,108 @@ class B2T_Model(L.LightningModule):
         return num_steps
 
     def configure_optimizers(self):
-        self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        betas = (self.config.optimizer.beta_1, self.config.optimizer.beta_2)
 
-        # return self.optimizer
-        num_steps = self.num_steps()
-
-        self.lr_scheduler = get_linear_schedule_with_warmup(
-            self.optimizer,
-            num_warmup_steps=num_steps * 0.20,
-            num_training_steps=num_steps,
+        self.optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.config.optimizer.peak_lr,
+            weight_decay=self.config.optimizer.weight_decay,
+            betas=betas,
+            eps=self.config.optimizer.eps,
         )
 
-        return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]
+        def get_scheduler(
+            optimizer, num_training_steps, warmup_steps, peak_lr, last_lr
+        ):
+
+            def lr_lambda(current_step):
+                if current_step < warmup_steps:
+                    return current_step / warmup_steps
+                progress = (current_step - warmup_steps) / (
+                    num_training_steps - warmup_steps
+                )
+                cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+                lr = last_lr + (peak_lr - last_lr) * cosine_decay
+                return lr / peak_lr
+
+            return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+        num_steps = self.num_steps()
+
+        self.scheduler = get_scheduler(
+            self.optimizer,
+            num_steps,
+            int(num_steps * self.config.optimizer.warmup_perc),
+            self.config.optimizer.peak_lr,
+            self.config.optimizer.last_lr,
+        )
+
+        lr_scheduler = {
+            "scheduler": self.scheduler,
+            "name": "custom_scheduler",
+            "interval": "step",  # Ensure learning rate updates per step
+            "frequency": 1,  # Optional: If you want to make sure it updates every step
+        }
+
+        return [self.optimizer], [lr_scheduler]
+
+
+class B2T_Phonemes_CTC(BasedModel):
+    def __init__(self, config: DictConfig):
+        super(B2T_Phonemes_CTC, self).__init__()
+        self.save_hyperparameters()
+
+        self.config = config
+
+        self.encoder = B2T_encoder(config)
+
+        self.linear = nn.Linear(
+            config.encoder.output_dims, config.ctc_decoder.phoneme_vocab_size
+        )
+
+    def forward(self, _input, input_len):
+        # _input (batch_size, input_len, input_channels)
+        hidden_states = self.encoder(
+            _input,
+            # cu_seqlens=input_cu_seqlens
+        )
+        res = self.linear(hidden_states)
+        return res.log_softmax(-1)
+
+    def training_step(self, batch):
+        # mask part of the input
+
+        res = self(
+            _input=batch["input"],
+            input_len=batch["input_len"],
+        )
+
+        new_input_len = batch["input_len"] // self.config.encoder.input_reduction_ratio
+
+        loss = F.ctc_loss(
+            res.transpose(0, 1),
+            batch["phonemize_ids"],
+            new_input_len,
+            batch["phonemize_ids_len"],
+        )
+
+        self.log("train_loss", loss.detach(), prog_bar=True)
+
+        return loss
+
+    def validation_step(self, batch):
+        res = self(
+            _input=batch["input"],
+            input_len=batch["input_len"],
+        )
+
+        new_input_len = batch["input_len"] // self.config.encoder.input_reduction_ratio
+
+        loss = F.ctc_loss(
+            res.transpose(0, 1),
+            batch["phonemize_ids"],
+            new_input_len,
+            batch["phonemize_ids_len"],
+        )
+
+        self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)

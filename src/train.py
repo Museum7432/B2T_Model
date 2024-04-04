@@ -19,7 +19,6 @@ def main(args):
         train_data_dir=args.train_data_dir,
         val_data_dir=args.val_data_dir,
         test_data_dir=args.test_data_dir,
-        # tokenizer_name=args.seq2seq_model,
         train_batch_size = args.train_batch_size,
         valid_batch_size= args.valid_batch_size,
         num_workers = args.num_workers,
@@ -62,7 +61,6 @@ def main(args):
 
     model = B2T_Model(
         lr=args.lr,
-        log_dir=log_dir,
         input_channels=256,
         vocab_size = 150
     )

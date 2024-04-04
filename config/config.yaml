@@ -1,0 +1,9 @@
+hydra:
+  job:
+    chdir: true
+
+defaults:
+  - _self_
+  - data: example # data_module
+  - model: example
+  - others: example # seed, trainer,...

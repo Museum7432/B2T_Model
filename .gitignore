@@ -2,3 +2,5 @@ notebooks
 dataset
 lightning_logs
 *__pycache__
+outputs
+*local*

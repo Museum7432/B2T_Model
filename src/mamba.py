@@ -333,7 +333,7 @@ class MixerModel(nn.Module):
         return hidden_states
 
 
-class MambaVec2Vec(nn.Module):
+class MambaFeatureExtractor(nn.Module):
 
     def __init__(
         self,

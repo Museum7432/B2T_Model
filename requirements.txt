@@ -8,3 +8,5 @@ wandb
 tensorboard
 einops
 mamba-ssm
+hydra-core
+phonemizer
