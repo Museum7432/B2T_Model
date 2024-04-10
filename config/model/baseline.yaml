@@ -41,7 +41,7 @@ encoder:
       - 6
       - true
 
-ctc_decoder:
+decoder:
   phoneme_vocab_size: 46
 
 optimizer:

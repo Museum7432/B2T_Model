@@ -7,3 +7,11 @@ defaults:
   - data: example # data_module
   - model: example
   - others: example # seed, trainer,...
+
+#    ctc_phonetic -> ctc_alphabet -> decoder_alphabet
+# or ctc_phonetic -> decoder_phonetic -> decoder_alphabet
+# TODO: train a phonetic to alphabet encoder-decoder
+training_stage: "ctc_phonetic"
+
+# all stages aside from ctc_phonetic require a starting checkpoint
+# from_ckpt: 0

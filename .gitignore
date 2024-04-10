@@ -3,4 +3,5 @@ dataset
 lightning_logs
 *__pycache__
 outputs
-*local*
+config/*/local*
+!src/

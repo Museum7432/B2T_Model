@@ -10,220 +10,16 @@ from dataclasses import dataclass, field
 from typing import Union
 from transformers.optimization import get_linear_schedule_with_warmup
 
-from .mamba import MambaFeatureExtractor, MambaConfig
 from omegaconf import DictConfig
 
-from .utils import phonetic_decode
-import numpy as np 
+from .utils import phonetic_decode, decode
+import numpy as np
 
-
-# copied from https://github.com/helboukkouri/character-bert/blob/main/modeling/character_cnn.py
-class Highway(torch.nn.Module):
-    """
-    A [Highway layer](https://arxiv.org/abs/1505.00387) does a gated combination of a linear
-    transformation and a non-linear transformation of its input.  :math:`y = g * x + (1 - g) *
-    f(A(x))`, where :math:`A` is a linear transformation, :math:`f` is an element-wise
-    non-linearity, and :math:`g` is an element-wise gate, computed as :math:`sigmoid(B(x))`.
-
-    This module will apply a fixed number of highway layers to its input, returning the final
-    result.
-
-    # Parameters
-
-    input_dim : `int`, required
-        The dimensionality of :math:`x`.  We assume the input has shape `(batch_size, ...,
-        input_dim)`.
-    num_layers : `int`, optional (default=`1`)
-        The number of highway layers to apply to the input.
-    activation : `Callable[[torch.Tensor], torch.Tensor]`, optional (default=`torch.nn.functional.relu`)
-        The non-linearity to use in the highway layers.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        num_layers: int = 1,
-        activation=torch.nn.functional.relu,
-    ):
-        super().__init__()
-        self._input_dim = input_dim
-        self._layers = torch.nn.ModuleList(
-            [torch.nn.Linear(input_dim, input_dim * 2) for _ in range(num_layers)]
-        )
-        self._activation = activation
-        for layer in self._layers:
-            # We should bias the highway layer to just carry its input forward.  We do that by
-            # setting the bias on `B(x)` to be positive, because that means `g` will be biased to
-            # be high, so we will carry the input forward.  The bias on `B(x)` is the second half
-            # of the bias vector in each Linear layer.
-            layer.bias[input_dim:].data.fill_(1)
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        current_input = inputs
-        for layer in self._layers:
-            projected_input = layer(current_input)
-            linear_part = current_input
-            # NOTE: if you modify this, think about whether you should modify the initialization
-            # above, too.
-            nonlinear_part, gate = projected_input.chunk(2, dim=-1)
-            nonlinear_part = self._activation(nonlinear_part)
-            gate = torch.sigmoid(gate)
-            current_input = gate * linear_part + (1 - gate) * nonlinear_part
-        return current_input
-
-
-class consecutive_pooling(nn.Module):
-    def __init__(self, pooling_type="max", group_size=2):
-        """perform pooling over group_size consecutive inputs"""
-        super(consecutive_pooling, self).__init__()
-        self.pooling_type = pooling_type
-        self.group_size = group_size
-
-        assert pooling_type in ["max", "mean", "min"]
-
-    def forward(self, hidden_states):
-        # hidden_states  (batch_size, seq_len, input_dims)
-        batch_size, seq_len, input_dims = hidden_states.shape
-        assert seq_len % self.group_size == 0
-
-        # (batch_size, seq_len//group_size, group_size, input_dims)
-        hidden_states = hidden_states.reshape(
-            (batch_size, seq_len // self.group_size, self.group_size, input_dims)
-        )
-
-        # (batch_size, seq_len//2, input_dims, 2)
-        hidden_states = hidden_states.transpose(2, 3)
-
-        # (batch_size, seq_len//2, input_dims)
-        if self.pooling_type == "max":
-            hidden_states = hidden_states.max(-1).values
-        elif self.pooling_type == "min":
-            hidden_states = hidden_states.min(-1).values
-        else:
-            hidden_states = hidden_states.mean(-1)
-
-        return hidden_states
-
-
-class concatenate_consecutive(nn.Module):
-    def __init__(self, input_dims, output_dims=None, group_size=2):
-        """concatenate group_size consecutive inputs and forward through a highway network"""
-        super(concatenate_consecutive, self).__init__()
-
-        self.group_size = group_size
-        self.input_dims = input_dims
-        self.output_dims = output_dims
-
-        if output_dims == None:
-            output_dims = input_dims * group_size
-
-        self._highways = Highway(
-            input_dims * group_size, 2, activation=nn.functional.relu
-        )
-
-        if input_dims * group_size != output_dims:
-            self._projection = nn.Linear(
-                input_dims * group_size, output_dims, bias=True
-            )
-        else:
-            self._projection = nn.Identity()
-
-    def forward(self, hidden_states):
-        # hidden_states  (batch_size, seq_len, input_dims)
-
-        batch_size, seq_len, input_dims = hidden_states.shape
-        assert input_dims == self.input_dims
-        assert seq_len % self.group_size == 0
-
-        # (batch_size, seq_len//group_size, input_dims*group_size)
-        hidden_states = hidden_states.reshape(
-            (batch_size, seq_len // self.group_size, input_dims * self.group_size)
-        )
-
-        # (batch_size, seq_len//group_size, input_dims*group_size)
-        hidden_states = self._highways(hidden_states)
-
-        # (batch_size, seq_len//group_size, output_dims)
-        hidden_states = self._projection(hidden_states)
-
-        return hidden_states
-
-
-class convolutional_block(nn.Module):
-    def __init__(self, input_dims, output_dims=None, stride=2):
-        super(convolutional_block, self).__init__()
-        # convolution block have a constant stride of 2
-        if output_dims is None:
-            output_dims = input_dims
-        
-        self.input_dims = input_dims
-        self.output_dims = output_dims
-        self.stride = stride
-
-        # self.conv1 = nn.Conv1d(
-        #     in_channels=input_dims,
-        #     out_channels=output_dims,
-        #     kernel_size=4,
-        #     padding_mode="replicate",
-        #     padding=(1, 2),
-        #     stride=stride,
-        # )
-
-        self.conv1 = nn.Conv1d(
-            in_channels=input_dims,
-            out_channels=output_dims,
-            kernel_size=3,
-            padding_mode="replicate",
-            padding=1,
-            stride=stride,
-        )
-
-        self.bn1 = nn.BatchNorm1d(output_dims)
-
-        self.relu = nn.ReLU()
-
-        self.conv2 = nn.Conv1d(
-            in_channels=output_dims,
-            out_channels=output_dims,
-            kernel_size=3,
-            padding_mode="replicate",
-            padding=1,
-            stride=1,
-        )
-
-        self.bn2 = nn.BatchNorm1d(output_dims)
-
-        if input_dims != output_dims:
-            self.residual = nn.Conv1d(
-                in_channels=input_dims,
-                out_channels=output_dims,
-                kernel_size=1,
-                stride=stride,
-                padding=0,
-            )
-        else:
-            self.residual = nn.MaxPool1d(kernel_size=1, stride=stride)
-
-    def forward(self, hidden_states):
-        # hidden_states  (batch_size, seq_len, input_dims)
-
-        # transpose input for convolution
-        hidden_states = hidden_states.transpose(1, 2)
-
-        residual_part = self.residual(hidden_states)
-
-        out = self.conv1(hidden_states)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        out += residual_part
-
-        convoluted = self.relu(out + residual_part)
-
-        return convoluted.transpose(1, 2)
+from .modules.mamba import mamba_block
+from .modules.conv import convolutional_block
+from .modules.concat import concatenate_consecutive
+from .modules.pooling import consecutive_pooling
+from .modules.local_attention import local_attention_block
 
 
 class B2T_encoder(L.LightningModule):
@@ -234,6 +30,7 @@ class B2T_encoder(L.LightningModule):
         #   ["mamba", 256, 2, True],  # input_channels, n_layer, bidirectional
         #   ["concat", 256, 512, 2],  # input_dims, output_dims, group_size
         #   ["pooling", "max", 2],  # pooling_type, group_size
+        #   ["conv", 256, 512, 2]
         # ]
 
         modules_list = []
@@ -242,12 +39,10 @@ class B2T_encoder(L.LightningModule):
             if l[0] == "mamba":
                 _, in_channels, n_layer, bidirectional = l
                 modules_list.append(
-                    MambaFeatureExtractor(
-                        MambaConfig(
-                            d_model=in_channels,
-                            n_layer=n_layer,
-                            bidirectional=bidirectional,
-                        )
+                    mamba_block(
+                        d_model=in_channels,
+                        n_layer=n_layer,
+                        bidirectional=bidirectional,
                     )
                 )
             elif l[0] == "concat":
@@ -269,20 +64,34 @@ class B2T_encoder(L.LightningModule):
             elif l[0] == "conv":
                 _, in_dims, out_dims, stride = l
                 modules_list.append(
-                    convolutional_block(input_dims=in_dims, output_dims=out_dims, stride=stride)
+                    convolutional_block(
+                        input_dims=in_dims, output_dims=out_dims, stride=stride
+                    )
+                )
+            elif l[0] == "attention":
+                _, in_dims, depth, local_attn_window_size, positional_embeding = l
+                modules_list.append(
+                    local_attention_block(
+                        input_dims=in_dims,
+                        depth=depth,
+                        local_attn_window_size=local_attn_window_size,
+                        max_seq_len=1000,
+                        positional_embeding=positional_embeding,
+                    )
                 )
             else:
                 raise ValueError(f"unknown layer: {l[0]}")
 
-        self.layers = nn.Sequential(*modules_list)
+        self.layers = nn.ModuleList(modules_list)
 
-    def forward(self, _input, input_len=None):
-        hidden_states = self.layers(
-            _input,
-            # cu_seqlens=input_len
-        )
+        self.output_dims = self.layers[-1].output_dims
+
+    def forward(self, hidden_states, input_len=None):
+        for layer in self.layers:
+            hidden_states, input_len = layer(hidden_states, input_len)
         # cu_seqlens is not available in mamba yet
-        return hidden_states
+        # and is only used by the attention block
+        return hidden_states, input_len
 
 
 class BaseModel(L.LightningModule):
@@ -346,44 +155,61 @@ class BaseModel(L.LightningModule):
         return [self.optimizer], [lr_scheduler]
 
 
-class B2T_Phonemes_CTC(BaseModel):
-    def __init__(self, config: DictConfig):
-        super(B2T_Phonemes_CTC, self).__init__()
+class B2T_CTC(BaseModel):
+    def __init__(self, config: DictConfig, phoneme_rec=False):
+        # phoneme_rec: recognize phoneme or character
+        super(B2T_CTC, self).__init__()
         self.save_hyperparameters()
+
+        self.phoneme_rec = phoneme_rec
 
         self.config = config
 
         self.encoder = B2T_encoder(config)
 
         self.linear = nn.Linear(
-            config.encoder.output_dims, config.ctc_decoder.phoneme_vocab_size
+            self.encoder.output_dims,
+            (
+                config.decoder.phoneme_vocab_size
+                if phoneme_rec
+                else config.decoder.character_vocab_size
+            ),
+            bias=False,
         )
 
     def forward(self, _input, input_len):
         # _input (batch_size, input_len, input_channels)
-        hidden_states = self.encoder(
-            _input,
-            # cu_seqlens=input_cu_seqlens
-        )
+        hidden_states, output_len = self.encoder(_input, input_len)
         res = self.linear(hidden_states)
-        return res.log_softmax(-1)
+        return res.log_softmax(-1), output_len
 
-    def training_step(self, batch):
-        # mask part of the input
-
-        res = self(
+    def calc_loss(self, batch):
+        res, output_len = self(
             _input=batch["input"],
             input_len=batch["input_len"],
         )
 
-        new_input_len = batch["input_len"] // self.config.encoder.input_reduction_ratio
+        if self.phoneme_rec:
+            loss = F.ctc_loss(
+                res.transpose(0, 1),
+                batch["phonemize_ids"],
+                output_len,
+                batch["phonemize_ids_len"] - 1,  # remove the eos token
+            )
+        else:
+            loss = F.ctc_loss(
+                res.transpose(0, 1),
+                batch["sent_ids"],
+                output_len,
+                batch["sent_ids_len"] - 1,  # remove the eos token
+            )
 
-        loss = F.ctc_loss(
-            res.transpose(0, 1),
-            batch["phonemize_ids"],
-            new_input_len,
-            batch["phonemize_ids_len"],
-        )
+        return loss, res, output_len
+
+    def training_step(self, batch):
+        # TODO: mask part of the input
+
+        loss, res, output_len = self.calc_loss(batch)
 
         self.log("train_loss", loss.detach(), prog_bar=True)
 
@@ -394,30 +220,27 @@ class B2T_Phonemes_CTC(BaseModel):
         self.val_tar = []
 
     def validation_step(self, batch):
-        res = self(
-            _input=batch["input"],
-            input_len=batch["input_len"],
-        )
 
-        new_input_len = batch["input_len"] // self.config.encoder.input_reduction_ratio
-
-        loss = F.ctc_loss(
-            res.transpose(0, 1),
-            batch["phonemize_ids"],
-            new_input_len,
-            batch["phonemize_ids_len"],
-        )
+        loss, res, output_len = self.calc_loss(batch)
 
         self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
 
         self.val_pred += res.argmax(dim=-1).cpu().tolist()
 
-        self.val_tar += batch["phonemized"]
-    
+        if self.phoneme_rec:
+            self.val_tar += batch["phonemized"]
+        else:
+            self.val_tar += batch["sent"]
+
     def on_validation_epoch_end(self):
 
-        raw_pred = [phonetic_decode(s) for s in self.val_pred]
-        pred = [phonetic_decode(s, True) for s in self.val_pred]
+        if self.phoneme_rec:
+            dec = phonetic_decode
+        else:
+            dec = decode
+
+        raw_pred = [dec(s) for s in self.val_pred]
+        pred = [dec(s, True) for s in self.val_pred]
 
         with open("valid.txt", "w") as txt_file:
             for i in range(len(self.val_pred)):
@@ -425,12 +248,11 @@ class B2T_Phonemes_CTC(BaseModel):
         self.val_pred = []
         self.val_tar = []
 
-
     def on_test_epoch_start(self):
         self.test_pred = []
 
     def test_step(self, batch):
-        res = self(
+        res, output_len = self(
             _input=batch["input"],
             input_len=batch["input_len"],
         )
@@ -439,10 +261,136 @@ class B2T_Phonemes_CTC(BaseModel):
 
     def on_test_epoch_end(self):
 
-        raw_pred = [phonetic_decode(s) for s in self.test_pred]
-        pred = [phonetic_decode(s, True) for s in self.test_pred]
+        if self.phoneme_rec:
+            dec = phonetic_decode
+        else:
+            dec = decode
+
+        raw_pred = [dec(s) for s in self.test_pred]
+        pred = [dec(s, True) for s in self.test_pred]
 
         with open("test.txt", "w") as txt_file:
             for i in range(len(self.test_pred)):
                 txt_file.write(f"{raw_pred[i]}\n{pred[i]}\n\n")
+        self.test_pred = []
+
+
+class B2T_Model(BaseModel):
+    def __init__(self, config: DictConfig, phoneme_rec=False):
+        # phoneme_rec: recognize phoneme or character
+        super(B2T_Model, self).__init__()
+        self.save_hyperparameters()
+
+        self.phoneme_rec = phoneme_rec
+
+        self.config = config
+
+        self.encoder = B2T_encoder(config)
+
+        self.linear = nn.Linear(
+            self.encoder.output_dims,
+            (
+                config.decoder.phoneme_vocab_size
+                if phoneme_rec
+                else config.decoder.character_vocab_size
+            ),
+            bias=False,
+        )
+
+    def forward(self, _input, input_len):
+        # _input (batch_size, input_len, input_channels)
+        hidden_states, output_len = self.encoder(_input, input_len)
+        logits = self.linear(hidden_states)
+        return logits, output_len
+
+    def calc_loss(self, batch):
+        logits, input_len = self(
+            _input=batch["input"],
+            input_len=batch["input_len"],
+        )
+
+        batch_size, seq_len, vocab_size = logits.shape
+
+        if self.phoneme_rec:
+            labels = batch["phonemize_ids"]
+        else:
+            labels = batch["sent_ids"]
+
+        # pad labels to the same length of logits
+
+        # batch_size, seq_len
+        padded_labels = F.pad(
+            labels, (0, seq_len - labels.shape[-1], 0, 0), mode="constant", value=-100
+        )
+
+        loss_fct = nn.CrossEntropyLoss()
+
+        loss = loss_fct(logits.view(-1, vocab_size), padded_labels.view(-1))
+
+        return loss, logits
+
+    def training_step(self, batch):
+        # TODO: mask part of the input
+
+        loss, logits = self.calc_loss(batch)
+
+        self.log("train_loss", loss.detach(), prog_bar=True)
+
+        return loss
+
+    def on_validation_epoch_start(self):
+        self.val_pred = []
+        self.val_tar = []
+
+    def validation_step(self, batch):
+
+        loss, logits = self.calc_loss(batch)
+
+        self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
+
+        self.val_pred += logits.argmax(dim=-1).cpu().tolist()
+
+        if self.phoneme_rec:
+            self.val_tar += batch["phonemized"]
+        else:
+            self.val_tar += batch["sent"]
+
+    def on_validation_epoch_end(self):
+
+        if self.phoneme_rec:
+            dec = phonetic_decode
+        else:
+            dec = decode
+
+        pred = [dec(s) for s in self.val_pred]
+
+        with open("valid.txt", "w") as txt_file:
+            for i in range(len(self.val_pred)):
+                txt_file.write(f"{pred[i]}\n{self.val_tar[i]}\n\n")
+        self.val_pred = []
+        self.val_tar = []
+
+    def on_test_epoch_start(self):
+        self.test_pred = []
+
+    def test_step(self, batch):
+        res, output_len = self(
+            _input=batch["input"],
+            input_len=batch["input_len"],
+        )
+
+        self.test_pred += res.argmax(dim=-1).cpu().tolist()
+
+    def on_test_epoch_end(self):
+
+        if self.phoneme_rec:
+            dec = phonetic_decode
+        else:
+            dec = decode
+
+        pred = [dec(s) for s in self.test_pred]
+
+        with open("test.txt", "w") as txt_file:
+            for i in range(len(self.test_pred)):
+                txt_file.write(f"{pred[i]}\n")
         self.test_pred = []

@@ -100,9 +100,7 @@ class Block(nn.Module):
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
             )
-        hidden_states = self.mixer(
-            hidden_states, inference_params=inference_params
-        )
+        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
@@ -215,9 +213,7 @@ class MambaWrapper(nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        out = self.mamba_fwd(
-            hidden_states, inference_params=inference_params
-        )
+        out = self.mamba_fwd(hidden_states, inference_params=inference_params)
         if self.bidirectional:
             out_rev = self.mamba_rev(
                 hidden_states.flip(
@@ -398,29 +394,24 @@ class MambaFeatureExtractor(nn.Module):
 
         return hidden_states
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name, device=None, dtype=None, **kwargs):
-        config_data = load_config_hf(pretrained_model_name)
-        config = MambaConfig(**config_data)
-        model = cls(config, device=device, dtype=dtype, **kwargs)
-        model.load_state_dict(
-            load_state_dict_hf(pretrained_model_name, device=device, dtype=dtype)
+
+class mamba_block(nn.Module):
+    def __init__(self, d_model, n_layer, bidirectional):
+        super(mamba_block, self).__init__()
+
+        self.input_dims = d_model
+        self.output_dims = d_model
+        
+        self.model = MambaFeatureExtractor(
+            MambaConfig(
+                d_model=d_model,
+                n_layer=n_layer,
+                bidirectional=bidirectional,
+            )
         )
-        return model
+    def forward(self, hidden_states, input_len=None):
+        # cu_seqlens is not available in mamba yet
 
-    def save_pretrained(self, save_directory):
-        """
-        Minimal implementation of save_pretrained for MambaLMHeadModel.
-        Save the model and its configuration file to a directory.
-        """
-        # Ensure save_directory exists
-        os.makedirs(save_directory, exist_ok=True)
+        hidden_states = self.model(hidden_states)
 
-        # Save the model's state_dict
-        model_path = os.path.join(save_directory, "pytorch_model.bin")
-        torch.save(self.state_dict(), model_path)
-
-        # Save the configuration of the model
-        config_path = os.path.join(save_directory, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(self.config.__dict__, f)
+        return hidden_states, input_len

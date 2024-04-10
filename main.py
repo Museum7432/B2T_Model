@@ -8,12 +8,47 @@ from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 import torch
 
-from src.model import B2T_Phonemes_CTC
+from src.model import B2T_CTC, B2T_Model
 from src.data import B2T_DataModule
 
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 
 import wandb
+
+
+def get_model(config):
+    print(f"Training {config.training_stage}")
+    if config.get("from_ckpt"):
+        print(f"load parameters from {config.from_ckpt}")
+        # load model
+        if config.training_stage == "ctc_phonetic":
+            model = B2T_CTC.load_from_checkpoint(
+                config.from_ckpt, config=config.model, phoneme_rec=True, strict=False
+            )
+        elif config.training_stage == "ctc_alphabet":
+            model = B2T_CTC.load_from_checkpoint(
+                config.from_ckpt, config=config.model, phoneme_rec=False, strict=False
+            )
+        elif config.training_stage == "decoder_phonetic":
+            model = B2T_Model.load_from_checkpoint(
+                config.from_ckpt, config=config.model, phoneme_rec=True, strict=False
+            )
+        elif config.training_stage == "decoder_alphabet":
+            model = B2T_Model.load_from_checkpoint(
+                config.from_ckpt, config=config.model, phoneme_rec=False, strict=False
+            )
+    else:
+        # load model
+        if config.training_stage == "ctc_phonetic":
+            model = B2T_CTC(config.model, phoneme_rec=True)
+        elif config.training_stage == "ctc_alphabet":
+            model = B2T_CTC(config.model, phoneme_rec=False)
+        elif config.training_stage == "decoder_phonetic":
+            model = B2T_Model(config.model, phoneme_rec=True)
+        elif config.training_stage == "decoder_alphabet":
+            model = B2T_Model(config.model, phoneme_rec=False)
+    
+    return model
 
 
 @hydra.main(version_base="1.3", config_path="config", config_name="config")
@@ -33,8 +68,9 @@ def main(config: DictConfig):
     if config.others.get("float32_matmul_precision"):
         torch.set_float32_matmul_precision(config.others.float32_matmul_precision)
 
-    # load model
-    model = B2T_Phonemes_CTC(config.model)
+
+
+    model = get_model(config)
 
     # load datamodule
     data_module = B2T_DataModule(config.data)

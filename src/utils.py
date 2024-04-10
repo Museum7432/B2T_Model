@@ -54,7 +54,10 @@ def phonetic_tokenize(text):
     # n uw k l iy er | r aa k ax t s
     text = flatten([c.split("-") for c in text])
 
-    text = ["_"] + text
+    # the model won't be able to align without the first "|"
+    # text = ["|"] + text + ["|"]
+
+    text = text + ["_"]
 
     return [phoneme_vocab.index(c) for c in text]
 
@@ -68,8 +71,12 @@ vocab = "#nuclear oktsdyifwhbvxpm'gqjz"
 
 
 def tokenize(text):
-    return [vocab.index(c) for c in text]
+    return [vocab.index(c) for c in text + "#"]
 
+def decode(ids, remove_consecutive=False):
+    if remove_consecutive:
+        ids = [i for i, _ in itertools.groupby(ids)]
+    return "".join([vocab[i] for i in ids])
 
 
 def unscrambleChans(timeSeriesDat):

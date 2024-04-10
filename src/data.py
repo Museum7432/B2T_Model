@@ -154,7 +154,8 @@ def collate_fn_factory():
     fields_to_pad = ["input", "sent_ids", "phonemize_ids"]
 
     # only scalar is allowed
-    pad_values = [0, 0, 0]
+    # ignore_index=-100
+    pad_values = [0, -100, -100]
 
     def _pad(arrs, constant_values=0, pad_width_fn=lambda l: ((0, l))):
         target_length = max([len(i) for i in arrs])

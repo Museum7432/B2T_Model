@@ -23,40 +23,51 @@ encoder:
     #   - out_dims
     #   - stride
 
-    # - - "attention"
-    #   - input_dims
-    #   - n_layer
-    #   - local_attn_window_size
-    #   - positional_embeding
+    # - - "conv"
+    #   - 256
+    #   - 256
+    #   - 2
 
+    - - "mamba"
+      - 256
+      - 1
+      - true
+    
     - - "conv"
       - 256
-      - 512
+      - 256
+      - 2
+    
+    - - "mamba"
+      - 256
       - 1
+      - true
+    
     - - "conv"
-      - 512
-      - 512
+      - 256
+      - 256
       - 2
-
+    
     - - "mamba"
-      - 512
-      - 2
+      - 256
+      - 1
+      - true
+    
+    - - "attention"
+      - 256
+      - 3
+      - 32
+      - false
+    
+    - - "mamba"
+      - 256
+      - 3
       - true
 
-    - - "conv"
-      - 512
-      - 512
-      - 2
-
-    - - "mamba"
-      - 512
-      - 6
-      - true
-  output_dims: 512
+  output_dims: 256
 
 decoder:
   phoneme_vocab_size: 46
-  character_vocab_size: 29
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training

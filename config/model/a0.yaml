@@ -3,6 +3,10 @@
 input_dims: 256
 
 encoder:
+  # the input sequence length will be reduced by 4 times
+  # anything higher will mess with the ctc_loss
+  # 2^(number of concat/pooling layers)
+  input_reduction_ratio: 2
   layers:
     # - - "mamba"
     #   - input_channels: int
@@ -23,40 +27,30 @@ encoder:
     #   - out_dims
     #   - stride
 
-    # - - "attention"
-    #   - input_dims
-    #   - n_layer
-    #   - local_attn_window_size
-    #   - positional_embeding
+    # - - "conv"
+    #   - 256
+    #   - 256
+    #   - 2
 
-    - - "conv"
+    - - mamba
       - 256
-      - 512
-      - 1
-    - - "conv"
-      - 512
-      - 512
-      - 2
+      - 4
+      - false
 
-    - - "mamba"
-      - 512
+    - - conv
+      - 256
+      - 256
       - 2
+    - - mamba
+    
+      - 256
+      - 4
       - true
 
-    - - "conv"
-      - 512
-      - 512
-      - 2
-
-    - - "mamba"
-      - 512
-      - 6
-      - true
-  output_dims: 512
+  output_dims: 256
 
 decoder:
   phoneme_vocab_size: 46
-  character_vocab_size: 29
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
