@@ -18,35 +18,24 @@ import wandb
 
 def get_model(config):
     print(f"Training {config.training_stage}")
-    if config.get("from_ckpt"):
-        print(f"load parameters from {config.from_ckpt}")
-        # load model
-        if config.training_stage == "ctc_phonetic":
-            model = B2T_CTC.load_from_checkpoint(
-                config.from_ckpt, config=config.model, phoneme_rec=True, strict=False
-            )
-        elif config.training_stage == "ctc_alphabet":
-            model = B2T_CTC.load_from_checkpoint(
-                config.from_ckpt, config=config.model, phoneme_rec=False, strict=False
-            )
-        elif config.training_stage == "decoder_phonetic":
-            model = B2T_Model.load_from_checkpoint(
-                config.from_ckpt, config=config.model, phoneme_rec=True, strict=False
-            )
-        elif config.training_stage == "decoder_alphabet":
-            model = B2T_Model.load_from_checkpoint(
-                config.from_ckpt, config=config.model, phoneme_rec=False, strict=False
-            )
+
+    if "ctc" in config.training_stage:
+        Model = B2T_CTC
     else:
-        # load model
-        if config.training_stage == "ctc_phonetic":
-            model = B2T_CTC(config.model, phoneme_rec=True)
-        elif config.training_stage == "ctc_alphabet":
-            model = B2T_CTC(config.model, phoneme_rec=False)
-        elif config.training_stage == "decoder_phonetic":
-            model = B2T_Model(config.model, phoneme_rec=True)
-        elif config.training_stage == "decoder_alphabet":
-            model = B2T_Model(config.model, phoneme_rec=False)
+        Model = B2T_Model
+    
+    if "phonetic" in config.training_stage:
+        phoneme_rec = True
+    else:
+        phoneme_rec = False
+    
+    if config.get("from_ckpt") and config.from_ckpt != 0:
+        print(f"load parameters from {config.from_ckpt}")
+        model = Model.load_from_checkpoint(
+            config.from_ckpt, config=config.model, phoneme_rec=phoneme_rec, strict=False
+        )
+    else:
+        model = Model(config.model, phoneme_rec=phoneme_rec)
     
     return model
 
@@ -60,27 +49,27 @@ def main(config: DictConfig):
 
     print(f"The current working directory is {working_dir}")
 
-    if config.others.get("seed"):
-        L.seed_everything(config.others.seed, workers=True)
+    if config.get("seed"):
+        L.seed_everything(config.seed, workers=True)
 
     torch.autograd.set_detect_anomaly(True)
 
-    if config.others.get("float32_matmul_precision"):
-        torch.set_float32_matmul_precision(config.others.float32_matmul_precision)
+    if config.get("float32_matmul_precision"):
+        torch.set_float32_matmul_precision(config.float32_matmul_precision)
 
 
 
     model = get_model(config)
 
     # load datamodule
-    data_module = B2T_DataModule(config.data)
+    data_module = B2T_DataModule(config.data_module)
 
     # loggers
     loggers = []
 
-    if config.others.get("wandb") and config.others.wandb:
+    if config.get("wandb") and config.wandb:
         wdb = WandbLogger(
-            project=config.others.experiment_name,
+            project=config.experiment_name,
             settings=wandb.Settings(code_dir=original_cwd),
         )
         loggers.append(wdb)
@@ -102,7 +91,7 @@ def main(config: DictConfig):
     callbacks = [lr_monitor, checkpoint_callback]
 
     trainer = L.Trainer(
-        **config.others.trainer,
+        **config.trainer,
         logger=loggers,
         callbacks=callbacks,
     )
@@ -113,7 +102,7 @@ def main(config: DictConfig):
 
     # trainer.test(ckpt_path="best", datamodule=data_module)
 
-    if config.others.get("wandb") and config.others.wandb:
+    if config.get("wandb") and config.wandb:
         artifact = wandb.Artifact(name="backup", type="configs")
         artifact.add_file(local_path="./valid.txt")
         artifact.add_file(local_path="./test.txt")

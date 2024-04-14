@@ -71,6 +71,23 @@ encoder:
 
 decoder:
   phoneme_vocab_size: 46
+  character_vocab_size: 29
+
+  # not used by the ctc decoder
+  layers:
+    - - "conv"
+      - 512
+      - 512
+      - 1
+    - - "concat"
+      - 512
+      - 512
+      - 2
+    - - "mamba"
+      - 512
+      - 4
+      - true
+  output_dims: 512
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training

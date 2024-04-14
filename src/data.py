@@ -1,6 +1,7 @@
 import lightning as L
 from torch.utils.data import DataLoader, IterableDataset, Dataset
 import scipy.io as sio
+import scipy
 import os
 from transformers import AutoTokenizer
 import numpy as np
@@ -13,6 +14,59 @@ from .utils import (
     clean_text,
     tokenize,
 )
+
+
+def load_file(path, has_labels=True):
+    data = sio.loadmat(path)
+    # sentenceText spikePow blockIdx
+
+    block_ids = list(set(data["blockIdx"].squeeze()))
+
+    spikePows = []
+    sentenceTexts = []
+
+    for b_idx in block_ids:
+        selected_ids = data["blockIdx"].squeeze() == b_idx
+
+        spikePow_block = data["spikePow"][0][selected_ids]
+
+        spikePow_block_lens = [len(a) for a in spikePow_block][:-1]
+
+        spikePow_block_start_indices = np.cumsum(spikePow_block_lens)
+
+        # block normalization
+        spikePow_block = np.vstack(spikePow_block)
+
+        spikePow_block = scipy.stats.zscore(spikePow_block)
+
+        spikePow_block = np.split(
+            spikePow_block, indices_or_sections=spikePow_block_start_indices
+        )
+
+        spikePows += spikePow_block
+
+        if has_labels:
+            sentenceText_block = data["sentenceText"][selected_ids]
+            sentenceTexts += [clean_text(s) for s in sentenceText_block]
+
+    data = None
+    return spikePows, sentenceTexts
+
+
+def load_files(paths, has_labels=True):
+
+    spikePows = []
+    sentenceTexts = []
+
+    for f in paths:
+        sp, st = load_file(path=f, has_labels=has_labels)
+
+        spikePows += sp
+
+        if has_labels:
+            sentenceTexts += st
+
+    return spikePows, sentenceTexts
 
 
 class B2T_Dataset(Dataset):
@@ -37,71 +91,54 @@ class B2T_Dataset(Dataset):
             # only load 1 file for debugging
             data_file_paths = data_file_paths[:1]
 
-        entries = [e for fpath in data_file_paths for e in self._load_data(fpath)]
+        spikePows, sentenceTexts = load_files(
+            paths=data_file_paths, has_labels=has_labels
+        )
 
-        self.entries = self._preprocess_data(entries)
+        spikePows = [unscrambleChans(sp) for sp in spikePows]
 
-    def _load_data(self, data_files_path):
-        data = sio.loadmat(data_files_path)
+        self.spikePows = spikePows
 
-        entries = []
-
-        for i in range(len(data["spikePow"][0])):
-            entry = {
-                "input": unscrambleChans(data["spikePow"][0][i]),
-            }
-
-            if self.has_labels:
-                entry["sent"] = clean_text(data["sentenceText"][i])
-
-            entries.append(entry)
-
-        return entries
-
-    def _preprocess_data(self, entries):
+        self.sentenceTexts = sentenceTexts
 
         if self.phonemize_target and self.has_labels:
-            sentences = [e["sent"] for e in entries]
-
-            phs = phonemize_text(sentences)
-
-            for i in range(len(entries)):
-                entries[i]["phonemized"] = phs[i]
-
-        return entries
+            self.phonemized = phonemize_text(sentenceTexts)
 
     def __len__(self):
-        return len(self.entries)
+        return len(self.spikePows)
 
     def __getitem__(self, idx):
-        item = self.entries[idx]
 
-        _input = item["input"]
+        spikePow = self.spikePows[idx]
 
-        # pad _input to a multiple of input_length_multiplier
-        if len(_input) % self.input_length_multiplier != 0:
+        # pad spikePow to a multiple of input_length_multiplier
+        if len(spikePow) % self.input_length_multiplier != 0:
             pad_width = (
                 self.input_length_multiplier
-                - len(_input) % self.input_length_multiplier
+                - len(spikePow) % self.input_length_multiplier
             )
 
             _start = np.random.randint(pad_width + 1)
 
             _end = pad_width - _start
 
-            _input = np.pad(_input, ((_start, _end), (0, 0)),  "constant", constant_values=0)
+            spikePow = np.pad(
+                spikePow, ((_start, _end), (0, 0)), "constant", constant_values=0
+            )
 
         re = {
-            "input": _input,
-            "input_len": len(_input),
+            "spikePow": spikePow,
+            "spikePow_len": len(spikePow),
         }
 
         if not self.has_labels:
             return re
 
-        tokenized = tokenize(item["sent"])
+        sent = self.sentenceTexts[idx]
 
-        re["sent"] = item["sent"]
+        tokenized = tokenize(sent)
+
+        re["sent"] = sent
 
         re["sent_ids"] = tokenized
         re["sent_ids_len"] = len(tokenized)
@@ -109,33 +146,37 @@ class B2T_Dataset(Dataset):
         if not self.phonemize_target:
             return re
 
-        ph = phonetic_tokenize(item["phonemized"])
+        phonemized = self.phonemized[idx]
 
-        re["phonemized"] = item["phonemized"]
+        ph = phonetic_tokenize(phonemized)
+
+        re["phonemized"] = phonemized
         re["phonemize_ids"] = ph
         re["phonemize_ids_len"] = len(ph)
 
-        # TODO: pad _input to atleast input_length_multiplier * phonemize_ids_len
-        # pad _input to a multiple of input_length_multiplier
+        # TODO: pad spikePow to atleast input_length_multiplier * phonemize_ids_len
+        # pad spikePow to a multiple of input_length_multiplier
 
-        if len(ph) * self.input_length_multiplier > len(_input):
+        if len(ph) * self.input_length_multiplier > len(spikePow):
             additional_input_length = len(ph) * self.input_length_multiplier - len(
-                _input
+                spikePow
             )
 
             additional_input_length = (
                 additional_input_length // self.input_length_multiplier + 1
             ) * self.input_length_multiplier
-            
+
             _start = np.random.randint(additional_input_length + 1)
             _end = additional_input_length - _start
 
-            _input = np.pad(_input, ((_start, _end), (0, 0)), "constant", constant_values=0)
+            spikePow = np.pad(
+                spikePow, ((_start, _end), (0, 0)), "constant", constant_values=0
+            )
 
-            re["input"] = _input
-            re["input_len"] = len(_input)
+            re["spikePow"] = spikePow
+            re["spikePow_len"] = len(spikePow)
 
-        assert len(ph) * self.input_length_multiplier <= len(_input)
+        assert len(ph) * self.input_length_multiplier <= len(spikePow)
 
         return re
 
@@ -143,8 +184,8 @@ class B2T_Dataset(Dataset):
 def collate_fn_factory():
 
     batch_fields = [
-        "input",
-        "input_len",
+        "spikePow",
+        "spikePow_len",
         "sent_ids",
         "sent_ids_len",
         "phonemize_ids",

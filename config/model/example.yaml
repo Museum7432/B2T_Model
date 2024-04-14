@@ -50,13 +50,30 @@ encoder:
 
     - - "mamba"
       - 512
-      - 6
+      - 2
       - true
   output_dims: 512
 
 decoder:
   phoneme_vocab_size: 46
   character_vocab_size: 29
+
+  # not used by the ctc decoder
+  layers:
+    - - "mamba"
+      - 512
+      - 2
+      - true
+    - - "conv"
+      - 512
+      - 512
+      - 2
+    - - "mamba"
+      - 512
+      - 4
+      - true
+  output_dims: 512
+
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training

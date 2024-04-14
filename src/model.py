@@ -22,10 +22,10 @@ from .modules.pooling import consecutive_pooling
 from .modules.local_attention import local_attention_block
 
 
-class B2T_encoder(L.LightningModule):
-    def __init__(self, config):
-        super(B2T_encoder, self).__init__()
-        # config.encoder.layers example
+class B2T_stack(L.LightningModule):
+    def __init__(self, layers):
+        super(B2T_stack, self).__init__()
+        # layers example
         # [
         #   ["mamba", 256, 2, True],  # input_channels, n_layer, bidirectional
         #   ["concat", 256, 512, 2],  # input_dims, output_dims, group_size
@@ -35,7 +35,7 @@ class B2T_encoder(L.LightningModule):
 
         modules_list = []
 
-        for l in config.encoder.layers:
+        for l in layers:
             if l[0] == "mamba":
                 _, in_channels, n_layer, bidirectional = l
                 modules_list.append(
@@ -165,7 +165,7 @@ class B2T_CTC(BaseModel):
 
         self.config = config
 
-        self.encoder = B2T_encoder(config)
+        self.encoder = B2T_stack(config.encoder.layers)
 
         self.linear = nn.Linear(
             self.encoder.output_dims,
@@ -177,16 +177,16 @@ class B2T_CTC(BaseModel):
             bias=False,
         )
 
-    def forward(self, _input, input_len):
+    def forward(self, spikePow, spikePow_len):
         # _input (batch_size, input_len, input_channels)
-        hidden_states, output_len = self.encoder(_input, input_len)
+        hidden_states, output_len = self.encoder(spikePow, spikePow_len)
         res = self.linear(hidden_states)
         return res.log_softmax(-1), output_len
 
     def calc_loss(self, batch):
         res, output_len = self(
-            _input=batch["input"],
-            input_len=batch["input_len"],
+            spikePow=batch["spikePow"],
+            spikePow_len=batch["spikePow_len"],
         )
 
         if self.phoneme_rec:
@@ -285,10 +285,19 @@ class B2T_Model(BaseModel):
 
         self.config = config
 
-        self.encoder = B2T_encoder(config)
+        self.encoder = B2T_stack(config.encoder.layers)
+
+        output_dims = self.encoder.output_dims
+
+        if config.decoder.get("layers"):
+            self.second_enc = B2T_stack(config.decoder.layers)
+
+            output_dims = self.second_enc.output_dims
+        else:
+            self.second_enc = None
 
         self.linear = nn.Linear(
-            self.encoder.output_dims,
+            output_dims,
             (
                 config.decoder.phoneme_vocab_size
                 if phoneme_rec
@@ -297,16 +306,20 @@ class B2T_Model(BaseModel):
             bias=False,
         )
 
-    def forward(self, _input, input_len):
-        # _input (batch_size, input_len, input_channels)
-        hidden_states, output_len = self.encoder(_input, input_len)
+    def forward(self, spikePow, spikePow_len):
+        # spikePow (batch_size, input_len, input_channels)
+        hidden_states, output_len = self.encoder(spikePow, spikePow_len)
+
+        if self.second_enc is not None:
+            hidden_states, output_len = self.second_enc(hidden_states, output_len)
+
         logits = self.linear(hidden_states)
         return logits, output_len
 
     def calc_loss(self, batch):
         logits, input_len = self(
-            _input=batch["input"],
-            input_len=batch["input_len"],
+            spikePow=batch["spikePow"],
+            spikePow_len=batch["spikePow_len"],
         )
 
         batch_size, seq_len, vocab_size = logits.shape

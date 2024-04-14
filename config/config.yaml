@@ -4,9 +4,7 @@ hydra:
 
 defaults:
   - _self_
-  - data: example # data_module
   - model: example
-  - others: example # seed, trainer,...
 
 #    ctc_phonetic -> ctc_alphabet -> decoder_alphabet
 # or ctc_phonetic -> decoder_phonetic -> decoder_alphabet
@@ -15,3 +13,33 @@ training_stage: "ctc_phonetic"
 
 # all stages aside from ctc_phonetic require a starting checkpoint
 # from_ckpt: 0
+
+data_module:
+  # padd input length to a multiple of 12
+  # input_length_multiplier must be divisible by input_reduction_ratio
+  input_length_multiplier: 12
+
+  train_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/train"
+  val_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/test"
+  test_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/competitionHoldOut"
+  train_batch_size: 4
+  valid_batch_size: 4
+  num_workers: 8
+  phonemize_target: true
+  # debugging: true
+
+
+seed: 49
+
+experiment_name: "B2T"
+wandb: false
+
+float32_matmul_precision: "medium"
+trainer:
+  accelerator: "gpu"
+  # devices: 1
+  # precision: "32-true"
+  # accumulate_grad_batches: 1
+  val_check_interval: 0.5
+  max_epochs: 10
+  gradient_clip_val: 1.0
