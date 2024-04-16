@@ -40,7 +40,17 @@ encoder:
 
     - - "mamba"
       - 512
-      - 8
+      - 4
+      - true
+
+    - - "conv"
+      - 512
+      - 512
+      - 2
+
+    - - "mamba"
+      - 512
+      - 2
       - true
 
 decoder:
@@ -49,15 +59,13 @@ decoder:
 
   # not used by the ctc decoder
   layers:
-    - - "attention"
+    - - "conv"
       - 512
-      - 4
-      - 128
-      - false
-
-    - - "mamba"
       - 512
       - 2
+    - - "mamba"
+      - 512
+      - 4
       - true
   output_dims: 512
 

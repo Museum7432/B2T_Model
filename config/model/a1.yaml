@@ -3,10 +3,6 @@
 input_dims: 256
 
 encoder:
-  # the input sequence length will be reduced by 4 times
-  # anything higher will mess with the ctc_loss
-  # 2^(number of concat/pooling layers)
-  input_reduction_ratio: 4
   layers:
     # - - "mamba"
     #   - input_channels: int

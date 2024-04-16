@@ -69,11 +69,11 @@ def phonetic_decode(ids, remove_consecutive=False):
 
 
 # for text generation
-vocab = "#nuclear oktsdyifwhbvxpm'gqjz"
+vocab = "_ nuclearoktsdyifwhbvxpm'gqjz"
 
 
 def tokenize(text):
-    return [vocab.index(c) for c in text + "#"]
+    return [vocab.index(c) for c in text + "_"]
 
 
 def decode(ids, remove_consecutive=False):
@@ -83,6 +83,7 @@ def decode(ids, remove_consecutive=False):
 
 
 def unscrambleChans(timeSeriesDat):
+    # TODO: mabe we don't need this
     # fmt: off
     chanToElec = [63, 64, 62, 61, 59, 58, 60, 54, 57, 50, 53, 49, 52, 45, 55, 44, 56, 39, 51, 43,
                   46, 38, 48, 37, 47, 36, 42, 35, 41, 34, 40, 33, 96, 90, 95, 89, 94, 88, 93, 87,

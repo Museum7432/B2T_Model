@@ -15,9 +15,8 @@ training_stage: "ctc_phonetic"
 # from_ckpt: 0
 
 data_module:
-  # padd input length to a multiple of 12
-  # input_length_multiplier must be divisible by input_reduction_ratio
-  input_length_multiplier: 12
+  # padd input length to a multiple of 8
+  input_length_multiplier: 16
 
   train_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/train"
   val_data_dir: "${hydra:runtime.cwd}/dataset/competitionData/test"

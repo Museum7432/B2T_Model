@@ -98,9 +98,9 @@ def main(config: DictConfig):
 
     trainer.fit(model, datamodule=data_module)
 
-    trainer.test(model, datamodule=data_module)
+    # trainer.test(model, datamodule=data_module)
 
-    # trainer.test(ckpt_path="best", datamodule=data_module)
+    trainer.test(ckpt_path="best", datamodule=data_module)
 
     if config.get("wandb") and config.wandb:
         artifact = wandb.Artifact(name="backup", type="configs")

@@ -22,56 +22,47 @@ encoder:
     #   - in_dims
     #   - out_dims
     #   - stride
+    #   - hidden_size
 
-    # - - "conv"
-    #   - 256
-    #   - 256
-    #   - 2
+    # - - "attention"
+    #   - input_dims
+    #   - n_layer
+    #   - local_attn_window_size
+    #   - positional_embeding
 
-    - - "mamba"
-      - 256
-      - 1
-      - true
-    
     - - "conv"
       - 256
-      - 256
+      - 512
       - 2
-    
-    - - "mamba"
-      - 256
-      - 1
-      - true
+      - 1024
     
     - - "conv"
-      - 256
-      - 256
+      - 512
+      - 512
       - 2
-    
+      - 1024
+
     - - "mamba"
-      - 256
-      - 1
-      - true
-    
-    - - "attention"
-      - 256
-      - 3
-      - 32
+      - 512
+      - 8
       - false
-    
-    - - "mamba"
-      - 256
-      - 3
-      - true
-
-  output_dims: 256
 
 decoder:
   phoneme_vocab_size: 46
+  character_vocab_size: 29
+
+  # not used by the ctc decoder
+  # layers:
+  #   - - "attention"
+  #     - 512
+  #     - 3
+  #     - 64
+  #     - false
+
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
-  peak_lr: 2e-4
+  peak_lr: 1e-4
   last_lr: 5e-6
   beta_1: 0.9
   beta_2: 0.95

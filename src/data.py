@@ -15,6 +15,50 @@ from .utils import (
     tokenize,
 )
 
+def add_noises_to_input(spikePow):
+    if np.random.rand() < 0.025:
+        return spikePow
+    
+    # assume spikePow has mean=0 and std=1 after block normalization
+    seq_len, channel_dim = spikePow.shape
+    
+    new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+    new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+
+    base = spikePow * new_std + new_mean
+
+    # now add more noises into part of the array
+
+    if np.random.rand() < 0.025:
+        return base
+
+    for _ in range(5):
+        selected = np.random.rand(seq_len) < 0.25
+
+        if selected.sum() == 0:
+            continue
+
+        new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+        new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+
+        base[selected] = spikePow[selected] * new_std + new_mean
+
+        # base[selected] = base[selected] * new_std + new_mean
+    
+    # and finally mask section of the input
+
+    if np.random.rand() < 0.75:
+        return base
+
+    mask_length = np.random.randint(30) + 4
+
+    _start = np.random.randint(seq_len - mask_length)
+    _end = _start + mask_length
+
+    base[_start:_end] = 1
+    
+    return base
+
 
 def load_file(path, has_labels=True):
     data = sio.loadmat(path)
@@ -77,11 +121,14 @@ class B2T_Dataset(Dataset):
         phonemize_target=False,
         debugging=False,
         input_length_multiplier=4,
+        add_noises=False
     ):
 
         self.has_labels = has_labels
         self.phonemize_target = phonemize_target
         self.input_length_multiplier = input_length_multiplier
+
+        self.add_noises = add_noises
 
         data_file_paths = [
             os.path.join(data_dir, f) for f in sorted(os.listdir(data_dir))
@@ -110,21 +157,35 @@ class B2T_Dataset(Dataset):
     def __getitem__(self, idx):
 
         spikePow = self.spikePows[idx]
+        # TODO: introduce noises into spikePow
+        if self.add_noises:
+            spikePow = add_noises_to_input(spikePow)
 
-        # pad spikePow to a multiple of input_length_multiplier
+        # cut bits at the start and end of spikePow to a multiple of input_length_multiplier
         if len(spikePow) % self.input_length_multiplier != 0:
-            pad_width = (
-                self.input_length_multiplier
-                - len(spikePow) % self.input_length_multiplier
-            )
+            
+            remainder = len(spikePow) % self.input_length_multiplier
 
-            _start = np.random.randint(pad_width + 1)
+            _start = np.random.randint(remainder + 1)
 
-            _end = pad_width - _start
+            _end = len(spikePow) - (remainder - _start)
 
-            spikePow = np.pad(
-                spikePow, ((_start, _end), (0, 0)), "constant", constant_values=0
-            )
+            spikePow = spikePow[_start:_end]
+
+            # pad_width = (
+            #     self.input_length_multiplier
+            #     - len(spikePow) % self.input_length_multiplier
+            # )
+
+            # _start = np.random.randint(pad_width + 1)
+
+            # _end = pad_width - _start
+
+            # spikePow = np.pad(
+            #     spikePow, ((_start, _end), (0, 0)), "constant", constant_values=0
+            # )
+
+        assert len(spikePow) % self.input_length_multiplier == 0
 
         re = {
             "spikePow": spikePow,
@@ -157,26 +218,26 @@ class B2T_Dataset(Dataset):
         # TODO: pad spikePow to atleast input_length_multiplier * phonemize_ids_len
         # pad spikePow to a multiple of input_length_multiplier
 
-        if len(ph) * self.input_length_multiplier > len(spikePow):
-            additional_input_length = len(ph) * self.input_length_multiplier - len(
-                spikePow
-            )
+        # if len(ph) * self.input_length_multiplier > len(spikePow):
+        #     additional_input_length = len(ph) * self.input_length_multiplier - len(
+        #         spikePow
+        #     )
 
-            additional_input_length = (
-                additional_input_length // self.input_length_multiplier + 1
-            ) * self.input_length_multiplier
+        #     additional_input_length = (
+        #         additional_input_length // self.input_length_multiplier + 1
+        #     ) * self.input_length_multiplier
 
-            _start = np.random.randint(additional_input_length + 1)
-            _end = additional_input_length - _start
+        #     _start = np.random.randint(additional_input_length + 1)
+        #     _end = additional_input_length - _start
 
-            spikePow = np.pad(
-                spikePow, ((_start, _end), (0, 0)), "constant", constant_values=0
-            )
+        #     spikePow = np.pad(
+        #         spikePow, ((_start, _end), (0, 0)), "constant", constant_values=0
+        #     )
 
-            re["spikePow"] = spikePow
-            re["spikePow_len"] = len(spikePow)
+        #     re["spikePow"] = spikePow
+        #     re["spikePow_len"] = len(spikePow)
 
-        assert len(ph) * self.input_length_multiplier <= len(spikePow)
+        # assert len(ph) * self.input_length_multiplier <= len(spikePow)
 
         return re
 
@@ -192,7 +253,7 @@ def collate_fn_factory():
         "phonemize_ids_len",
     ]
 
-    fields_to_pad = ["input", "sent_ids", "phonemize_ids"]
+    fields_to_pad = ["spikePow", "sent_ids", "phonemize_ids"]
 
     # only scalar is allowed
     # ignore_index=-100
@@ -224,7 +285,7 @@ def collate_fn_factory():
 
         for f, v in zip(fields_to_pad, pad_values):
             if f in batch.keys():
-                if f == "input":
+                if f == "spikePow":
                     # TODO: use 'edge' pad mode
                     batch[f] = _pad(
                         batch[f],
@@ -268,6 +329,7 @@ class B2T_DataModule(L.LightningDataModule):
             phonemize_target=self.config.phonemize_target,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
+            add_noises=True
         )
 
         self.val_dataset = B2T_Dataset(
@@ -276,6 +338,7 @@ class B2T_DataModule(L.LightningDataModule):
             phonemize_target=self.config.phonemize_target,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
+            add_noises=False
         )
 
         self.test_dataset = B2T_Dataset(
@@ -284,6 +347,7 @@ class B2T_DataModule(L.LightningDataModule):
             phonemize_target=False,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
+            add_noises=False
         )
 
     def train_dataloader(self):

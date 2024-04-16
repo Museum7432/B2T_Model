@@ -62,10 +62,15 @@ class B2T_stack(L.LightningModule):
                     )
                 )
             elif l[0] == "conv":
-                _, in_dims, out_dims, stride = l
+                if len(l) == 5:
+                    _, in_dims, out_dims, stride, hidden_size = l
+                else:
+                    _, in_dims, out_dims, stride = l
+                    hidden_size=None
+                    
                 modules_list.append(
                     convolutional_block(
-                        input_dims=in_dims, output_dims=out_dims, stride=stride
+                        input_dims=in_dims, output_dims=out_dims, stride=stride, hidden_size=hidden_size
                     )
                 )
             elif l[0] == "attention":
@@ -167,20 +172,24 @@ class B2T_CTC(BaseModel):
 
         self.encoder = B2T_stack(config.encoder.layers)
 
-        self.linear = nn.Linear(
-            self.encoder.output_dims,
-            (
-                config.decoder.phoneme_vocab_size
-                if phoneme_rec
-                else config.decoder.character_vocab_size
-            ),
-            bias=False,
-        )
+        if phoneme_rec:
+            self.linear_ph = nn.Linear(
+                self.encoder.output_dims, config.decoder.phoneme_vocab_size
+            )
+        else:
+            self.linear_ch = nn.Linear(
+                self.encoder.output_dims, config.decoder.character_vocab_size
+            )
 
     def forward(self, spikePow, spikePow_len):
         # _input (batch_size, input_len, input_channels)
         hidden_states, output_len = self.encoder(spikePow, spikePow_len)
-        res = self.linear(hidden_states)
+
+        if self.phoneme_rec:
+            res = self.linear_ph(hidden_states)
+        else:
+            res = self.linear_ch(hidden_states)
+
         return res.log_softmax(-1), output_len
 
     def calc_loss(self, batch):
@@ -223,7 +232,7 @@ class B2T_CTC(BaseModel):
 
         loss, res, output_len = self.calc_loss(batch)
 
-        self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
+        self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
 
         self.val_pred += res.argmax(dim=-1).cpu().tolist()
 
@@ -242,6 +251,8 @@ class B2T_CTC(BaseModel):
         raw_pred = [dec(s) for s in self.val_pred]
         pred = [dec(s, True) for s in self.val_pred]
 
+        pred = [s.replace("_", "") for s in pred]
+
         with open("valid.txt", "w") as txt_file:
             for i in range(len(self.val_pred)):
                 txt_file.write(f"{raw_pred[i]}\n{pred[i]}\n{self.val_tar[i]}\n\n")
@@ -253,8 +264,8 @@ class B2T_CTC(BaseModel):
 
     def test_step(self, batch):
         res, output_len = self(
-            _input=batch["input"],
-            input_len=batch["input_len"],
+            spikePow=batch["spikePow"],
+            spikePow_len=batch["spikePow_len"],
         )
 
         self.test_pred += res.argmax(dim=-1).cpu().tolist()
@@ -268,6 +279,8 @@ class B2T_CTC(BaseModel):
 
         raw_pred = [dec(s) for s in self.test_pred]
         pred = [dec(s, True) for s in self.test_pred]
+
+        pred = [s.replace("_", "") for s in pred]
 
         with open("test.txt", "w") as txt_file:
             for i in range(len(self.test_pred)):
@@ -296,15 +309,14 @@ class B2T_Model(BaseModel):
         else:
             self.second_enc = None
 
-        self.linear = nn.Linear(
-            output_dims,
-            (
-                config.decoder.phoneme_vocab_size
-                if phoneme_rec
-                else config.decoder.character_vocab_size
-            ),
-            bias=False,
-        )
+        if phoneme_rec:
+            self.linear_ph = nn.Linear(
+                output_dims, config.decoder.phoneme_vocab_size
+            )
+        else:
+            self.linear_ch = nn.Linear(
+                output_dims, config.decoder.character_vocab_size
+            )
 
     def forward(self, spikePow, spikePow_len):
         # spikePow (batch_size, input_len, input_channels)
@@ -312,8 +324,12 @@ class B2T_Model(BaseModel):
 
         if self.second_enc is not None:
             hidden_states, output_len = self.second_enc(hidden_states, output_len)
+        
+        if self.phoneme_rec:
+            logits = self.linear_ph(hidden_states)
+        else:
+            logits = self.linear_ch(hidden_states)
 
-        logits = self.linear(hidden_states)
         return logits, output_len
 
     def calc_loss(self, batch):
@@ -359,7 +375,7 @@ class B2T_Model(BaseModel):
 
         loss, logits = self.calc_loss(batch)
 
-        self.log("valid_loss", loss, batch_size=len(batch["input"]), prog_bar=True)
+        self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
 
         self.val_pred += logits.argmax(dim=-1).cpu().tolist()
 
@@ -380,6 +396,8 @@ class B2T_Model(BaseModel):
         with open("valid.txt", "w") as txt_file:
             for i in range(len(self.val_pred)):
                 txt_file.write(f"{pred[i]}\n{self.val_tar[i]}\n\n")
+        
+        
         self.val_pred = []
         self.val_tar = []
 
@@ -388,8 +406,8 @@ class B2T_Model(BaseModel):
 
     def test_step(self, batch):
         res, output_len = self(
-            _input=batch["input"],
-            input_len=batch["input_len"],
+            spikePow=batch["spikePow"],
+            spikePow_len=batch["spikePow_len"],
         )
 
         self.test_pred += res.argmax(dim=-1).cpu().tolist()

@@ -22,6 +22,7 @@ encoder:
     #   - in_dims
     #   - out_dims
     #   - stride
+    #   - hidden_size
 
     # - - "attention"
     #   - input_dims
@@ -33,10 +34,13 @@ encoder:
       - 256
       - 512
       - 1
+      - 512
+
     - - "conv"
       - 512
       - 512
       - 2
+      - 512
 
     - - "mamba"
       - 512
@@ -47,12 +51,12 @@ encoder:
       - 512
       - 512
       - 2
+      - 512
 
     - - "mamba"
       - 512
-      - 2
+      - 6
       - true
-  output_dims: 512
 
 decoder:
   phoneme_vocab_size: 46
@@ -68,6 +72,7 @@ decoder:
       - 512
       - 512
       - 2
+      - 512
     - - "mamba"
       - 512
       - 4
