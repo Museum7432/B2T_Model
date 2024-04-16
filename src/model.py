@@ -66,11 +66,14 @@ class B2T_stack(L.LightningModule):
                     _, in_dims, out_dims, stride, hidden_size = l
                 else:
                     _, in_dims, out_dims, stride = l
-                    hidden_size=None
-                    
+                    hidden_size = None
+
                 modules_list.append(
                     convolutional_block(
-                        input_dims=in_dims, output_dims=out_dims, stride=stride, hidden_size=hidden_size
+                        input_dims=in_dims,
+                        output_dims=out_dims,
+                        stride=stride,
+                        hidden_size=hidden_size,
                     )
                 )
             elif l[0] == "attention":
@@ -180,9 +183,22 @@ class B2T_CTC(BaseModel):
             self.linear_ch = nn.Linear(
                 self.encoder.output_dims, config.decoder.character_vocab_size
             )
+        # 0: padding
+        # 1: input
+        # 2: masked
+        # since mamba has not support masking out padded inputs
+        self.mask_tokens = nn.Embedding(
+            num_embeddings=3, embedding_dim=256, padding_idx=1
+        )
 
-    def forward(self, spikePow, spikePow_len):
+    def forward(self, spikePow, spikePow_len, spikePow_mask):
         # _input (batch_size, input_len, input_channels)
+
+        mask_embeddings = self.mask_tokens(spikePow_mask)
+
+        # assume spikePow is padded and masked with 0
+        spikePow = spikePow + mask_embeddings
+
         hidden_states, output_len = self.encoder(spikePow, spikePow_len)
 
         if self.phoneme_rec:
@@ -196,6 +212,7 @@ class B2T_CTC(BaseModel):
         res, output_len = self(
             spikePow=batch["spikePow"],
             spikePow_len=batch["spikePow_len"],
+            spikePow_mask=batch["spikePow_mask"],
         )
 
         if self.phoneme_rec:
@@ -266,6 +283,7 @@ class B2T_CTC(BaseModel):
         res, output_len = self(
             spikePow=batch["spikePow"],
             spikePow_len=batch["spikePow_len"],
+            spikePow_mask=batch["spikePow_mask"],
         )
 
         self.test_pred += res.argmax(dim=-1).cpu().tolist()
@@ -310,21 +328,30 @@ class B2T_Model(BaseModel):
             self.second_enc = None
 
         if phoneme_rec:
-            self.linear_ph = nn.Linear(
-                output_dims, config.decoder.phoneme_vocab_size
-            )
+            self.linear_ph = nn.Linear(output_dims, config.decoder.phoneme_vocab_size)
         else:
-            self.linear_ch = nn.Linear(
-                output_dims, config.decoder.character_vocab_size
-            )
+            self.linear_ch = nn.Linear(output_dims, config.decoder.character_vocab_size)
+        
+        # 0: padding
+        # 1: input
+        # 2: masked
+        # since mamba has not support masking out padded inputs
+        self.mask_tokens = nn.Embedding(
+            num_embeddings=3, embedding_dim=256, padding_idx=1
+        )
 
-    def forward(self, spikePow, spikePow_len):
+    def forward(self, spikePow, spikePow_len, spikePow_mask):
         # spikePow (batch_size, input_len, input_channels)
+        mask_embeddings = self.mask_tokens(spikePow_mask)
+
+        # assume spikePow is padded and masked with 0
+        spikePow = spikePow + mask_embeddings
+
         hidden_states, output_len = self.encoder(spikePow, spikePow_len)
 
         if self.second_enc is not None:
             hidden_states, output_len = self.second_enc(hidden_states, output_len)
-        
+
         if self.phoneme_rec:
             logits = self.linear_ph(hidden_states)
         else:
@@ -336,6 +363,7 @@ class B2T_Model(BaseModel):
         logits, input_len = self(
             spikePow=batch["spikePow"],
             spikePow_len=batch["spikePow_len"],
+            spikePow_mask=batch["spikePow_mask"],
         )
 
         batch_size, seq_len, vocab_size = logits.shape
@@ -396,8 +424,7 @@ class B2T_Model(BaseModel):
         with open("valid.txt", "w") as txt_file:
             for i in range(len(self.val_pred)):
                 txt_file.write(f"{pred[i]}\n{self.val_tar[i]}\n\n")
-        
-        
+
         self.val_pred = []
         self.val_tar = []
 
@@ -408,6 +435,7 @@ class B2T_Model(BaseModel):
         res, output_len = self(
             spikePow=batch["spikePow"],
             spikePow_len=batch["spikePow_len"],
+            spikePow_mask=batch["spikePow_mask"],
         )
 
         self.test_pred += res.argmax(dim=-1).cpu().tolist()

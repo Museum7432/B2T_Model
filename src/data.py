@@ -15,49 +15,63 @@ from .utils import (
     tokenize,
 )
 
-def add_noises_to_input(spikePow):
+
+def add_noises_to_input(spikePow, spikePow_mask):
     if np.random.rand() < 0.025:
-        return spikePow
-    
+        return spikePow, spikePow_mask
+
     # assume spikePow has mean=0 and std=1 after block normalization
     seq_len, channel_dim = spikePow.shape
-    
-    new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
-    new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+
+    new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(
+        spikePow.dtype
+    )
+    new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(
+        spikePow.dtype
+    )
 
     base = spikePow * new_std + new_mean
 
     # now add more noises into part of the array
 
     if np.random.rand() < 0.025:
-        return base
+        return base, spikePow_mask
 
-    for _ in range(5):
-        selected = np.random.rand(seq_len) < 0.25
+    for _ in range(6):
+        selected = np.random.rand(seq_len) < 0.5
 
         if selected.sum() == 0:
             continue
 
-        new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
-        new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+        new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(
+            spikePow.dtype
+        )
+        new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(
+            spikePow.dtype
+        )
 
-        base[selected] = spikePow[selected] * new_std + new_mean
+        # base[selected] = spikePow[selected] * new_std + new_mean
+        base[selected] = base[selected] * new_std + new_mean
 
-        # base[selected] = base[selected] * new_std + new_mean
-    
+
     # and finally mask section of the input
 
-    if np.random.rand() < 0.75:
-        return base
+    if np.random.rand() < 0.05:
+        return base, spikePow_mask
 
-    mask_length = np.random.randint(30) + 4
+    for _ in range(np.random.randint(4) + 1):
+        mask_length = np.random.randint(16) + 4
 
-    _start = np.random.randint(seq_len - mask_length)
-    _end = _start + mask_length
+        assert seq_len > mask_length
 
-    base[_start:_end] = 1
-    
-    return base
+        _start = np.random.randint(seq_len - mask_length)
+        _end = _start + mask_length
+
+        base[_start:_end] = 0
+
+        spikePow_mask[_start:_end] = 2
+
+    return base, spikePow_mask
 
 
 def load_file(path, has_labels=True):
@@ -121,7 +135,7 @@ class B2T_Dataset(Dataset):
         phonemize_target=False,
         debugging=False,
         input_length_multiplier=4,
-        add_noises=False
+        add_noises=False,
     ):
 
         self.has_labels = has_labels
@@ -157,13 +171,19 @@ class B2T_Dataset(Dataset):
     def __getitem__(self, idx):
 
         spikePow = self.spikePows[idx]
+
+        # 0: padding
+        # 1: input
+        # 2: masked
+        spikePow_mask = np.ones(len(spikePow)).astype(int)
+
         # TODO: introduce noises into spikePow
         if self.add_noises:
-            spikePow = add_noises_to_input(spikePow)
+            spikePow, spikePow_mask = add_noises_to_input(spikePow, spikePow_mask)
 
         # cut bits at the start and end of spikePow to a multiple of input_length_multiplier
         if len(spikePow) % self.input_length_multiplier != 0:
-            
+
             remainder = len(spikePow) % self.input_length_multiplier
 
             _start = np.random.randint(remainder + 1)
@@ -171,6 +191,8 @@ class B2T_Dataset(Dataset):
             _end = len(spikePow) - (remainder - _start)
 
             spikePow = spikePow[_start:_end]
+
+            spikePow_mask = spikePow_mask[_start:_end]
 
             # pad_width = (
             #     self.input_length_multiplier
@@ -190,6 +212,7 @@ class B2T_Dataset(Dataset):
         re = {
             "spikePow": spikePow,
             "spikePow_len": len(spikePow),
+            "spikePow_mask": spikePow_mask,
         }
 
         if not self.has_labels:
@@ -247,17 +270,29 @@ def collate_fn_factory():
     batch_fields = [
         "spikePow",
         "spikePow_len",
+        "spikePow_mask",
         "sent_ids",
         "sent_ids_len",
         "phonemize_ids",
         "phonemize_ids_len",
+        "sent",
+        "phonemized",
     ]
 
-    fields_to_pad = ["spikePow", "sent_ids", "phonemize_ids"]
+    fields_to_pad = ["spikePow", "spikePow_mask", "sent_ids", "phonemize_ids"]
 
+    tensor_fields = [
+        "spikePow",
+        "spikePow_len",
+        "sent_ids",
+        "sent_ids_len",
+        "phonemize_ids",
+        "phonemize_ids_len",
+        "spikePow_mask",
+    ]
     # only scalar is allowed
     # ignore_index=-100
-    pad_values = [0, -100, -100]
+    pad_values = [0, 0, -100, -100]
 
     def _pad(arrs, constant_values=0, pad_width_fn=lambda l: ((0, l))):
         target_length = max([len(i) for i in arrs])
@@ -295,15 +330,9 @@ def collate_fn_factory():
                 else:
                     batch[f] = _pad(batch[f], constant_values=v)
 
-        for f in batch_fields:
+        for f in tensor_fields:
             if f in batch.keys():
                 batch[f] = torch.tensor(batch[f])
-
-        if "sent" in items[0].keys():
-            batch["sent"] = [i["sent"] for i in items]
-
-        if "phonemized" in items[0].keys():
-            batch["phonemized"] = [i["phonemized"] for i in items]
 
         return batch
 
@@ -329,7 +358,7 @@ class B2T_DataModule(L.LightningDataModule):
             phonemize_target=self.config.phonemize_target,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
-            add_noises=True
+            add_noises=True,
         )
 
         self.val_dataset = B2T_Dataset(
@@ -338,7 +367,7 @@ class B2T_DataModule(L.LightningDataModule):
             phonemize_target=self.config.phonemize_target,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
-            add_noises=False
+            add_noises=False,
         )
 
         self.test_dataset = B2T_Dataset(
@@ -347,7 +376,7 @@ class B2T_DataModule(L.LightningDataModule):
             phonemize_target=False,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
-            add_noises=False
+            add_noises=False,
         )
 
     def train_dataloader(self):
