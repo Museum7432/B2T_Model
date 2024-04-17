@@ -71,6 +71,7 @@ def main(config: DictConfig):
         wdb = WandbLogger(
             project=config.experiment_name,
             settings=wandb.Settings(code_dir=original_cwd),
+            tags=[config.training_stage]
         )
         loggers.append(wdb)
 

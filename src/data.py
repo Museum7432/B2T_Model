@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader, IterableDataset, Dataset
 import scipy.io as sio
 import scipy
 import os
-from transformers import AutoTokenizer
 import numpy as np
 import torch
 
@@ -50,81 +49,27 @@ def add_noises_to_input(spikePow, spikePow_mask):
             spikePow.dtype
         )
 
-        # base[selected] = spikePow[selected] * new_std + new_mean
-        base[selected] = base[selected] * new_std + new_mean
-
+        base[selected] = spikePow[selected] * new_std + new_mean
+        # base[selected] = base[selected] * new_std + new_mean
 
     # and finally mask section of the input
 
     if np.random.rand() < 0.05:
         return base, spikePow_mask
 
-    for _ in range(np.random.randint(4) + 1):
-        mask_length = np.random.randint(16) + 4
+    # for _ in range(np.random.randint(2) + 1):
 
-        assert seq_len > mask_length
+    mask_length = np.random.randint(64) + 4
+    assert seq_len > mask_length
 
-        _start = np.random.randint(seq_len - mask_length)
-        _end = _start + mask_length
+    _start = np.random.randint(seq_len - mask_length)
+    _end = _start + mask_length
 
-        base[_start:_end] = 0
+    base[_start:_end] = 0
 
-        spikePow_mask[_start:_end] = 2
+    spikePow_mask[_start:_end] = 2
 
     return base, spikePow_mask
-
-
-def load_file(path, has_labels=True):
-    data = sio.loadmat(path)
-    # sentenceText spikePow blockIdx
-
-    block_ids = list(set(data["blockIdx"].squeeze()))
-
-    spikePows = []
-    sentenceTexts = []
-
-    for b_idx in block_ids:
-        selected_ids = data["blockIdx"].squeeze() == b_idx
-
-        spikePow_block = data["spikePow"][0][selected_ids]
-
-        spikePow_block_lens = [len(a) for a in spikePow_block][:-1]
-
-        spikePow_block_start_indices = np.cumsum(spikePow_block_lens)
-
-        # block normalization
-        spikePow_block = np.vstack(spikePow_block)
-
-        spikePow_block = scipy.stats.zscore(spikePow_block)
-
-        spikePow_block = np.split(
-            spikePow_block, indices_or_sections=spikePow_block_start_indices
-        )
-
-        spikePows += spikePow_block
-
-        if has_labels:
-            sentenceText_block = data["sentenceText"][selected_ids]
-            sentenceTexts += [clean_text(s) for s in sentenceText_block]
-
-    data = None
-    return spikePows, sentenceTexts
-
-
-def load_files(paths, has_labels=True):
-
-    spikePows = []
-    sentenceTexts = []
-
-    for f in paths:
-        sp, st = load_file(path=f, has_labels=has_labels)
-
-        spikePows += sp
-
-        if has_labels:
-            sentenceTexts += st
-
-    return spikePows, sentenceTexts
 
 
 class B2T_Dataset(Dataset):
@@ -132,45 +77,43 @@ class B2T_Dataset(Dataset):
         self,
         data_dir,
         has_labels=True,
-        phonemize_target=False,
         debugging=False,
         input_length_multiplier=4,
         add_noises=False,
     ):
 
         self.has_labels = has_labels
-        self.phonemize_target = phonemize_target
         self.input_length_multiplier = input_length_multiplier
 
         self.add_noises = add_noises
 
-        data_file_paths = [
-            os.path.join(data_dir, f) for f in sorted(os.listdir(data_dir))
-        ]
+        # self.spikePows = np.load(os.path.join(data_dir, "spikePows.npy"),mmap_mode="r")
+        # reconstruct the np.mmap every itteration is way more memory efficient
+        self.spikePows_path = os.path.join(data_dir, "spikePows.npy")
+
+        self.spikePow_indices = np.load(os.path.join(data_dir, "spikePow_indices.npy"))
+
+        if self.has_labels:
+            self.sentenceTexts = np.load(os.path.join(data_dir, "sentenceTexts.npy"))
+
+            self.phonemizedTexts = np.load(
+                os.path.join(data_dir, "phonemizedTexts.npy")
+            )
 
         if debugging:
-            # only load 1 file for debugging
-            data_file_paths = data_file_paths[:1]
-
-        spikePows, sentenceTexts = load_files(
-            paths=data_file_paths, has_labels=has_labels
-        )
-
-        spikePows = [unscrambleChans(sp) for sp in spikePows]
-
-        self.spikePows = spikePows
-
-        self.sentenceTexts = sentenceTexts
-
-        if self.phonemize_target and self.has_labels:
-            self.phonemized = phonemize_text(sentenceTexts)
+            # only use the first 500 entries for debugging
+            self.spikePow_indices = self.spikePow_indices[:500]
 
     def __len__(self):
-        return len(self.spikePows)
+        return len(self.spikePow_indices)
 
     def __getitem__(self, idx):
 
-        spikePow = self.spikePows[idx]
+        spikePows = np.load(self.spikePows_path, mmap_mode="r")
+
+        _start, _end = self.spikePow_indices[idx]
+
+        spikePow = spikePows[_start:_end]
 
         # 0: padding
         # 1: input
@@ -227,10 +170,7 @@ class B2T_Dataset(Dataset):
         re["sent_ids"] = tokenized
         re["sent_ids_len"] = len(tokenized)
 
-        if not self.phonemize_target:
-            return re
-
-        phonemized = self.phonemized[idx]
+        phonemized = self.phonemizedTexts[idx]
 
         ph = phonetic_tokenize(phonemized)
 
@@ -355,7 +295,6 @@ class B2T_DataModule(L.LightningDataModule):
         self.train_dataset = B2T_Dataset(
             data_dir=self.config.train_data_dir,
             has_labels=True,
-            phonemize_target=self.config.phonemize_target,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
             add_noises=True,
@@ -364,7 +303,6 @@ class B2T_DataModule(L.LightningDataModule):
         self.val_dataset = B2T_Dataset(
             data_dir=self.config.val_data_dir,
             has_labels=True,
-            phonemize_target=self.config.phonemize_target,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
             add_noises=False,
@@ -373,7 +311,6 @@ class B2T_DataModule(L.LightningDataModule):
         self.test_dataset = B2T_Dataset(
             data_dir=self.config.test_data_dir,
             has_labels=False,
-            phonemize_target=False,
             input_length_multiplier=self.config.input_length_multiplier,
             debugging=self.debugging,
             add_noises=False,
