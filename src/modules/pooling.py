@@ -11,7 +11,7 @@ class consecutive_pooling(nn.Module):
 
         assert pooling_type in ["max", "mean", "min"]
 
-    def forward(self, hidden_states, input_len):
+    def forward(self, hidden_states):
         # hidden_states  (batch_size, seq_len, input_dims)
         batch_size, seq_len, input_dims = hidden_states.shape
         assert seq_len % self.group_size == 0
@@ -31,7 +31,5 @@ class consecutive_pooling(nn.Module):
             hidden_states = hidden_states.min(-1).values
         else:
             hidden_states = hidden_states.mean(-1)
-        
-        input_len = input_len // self.group_size
 
-        return hidden_states, input_len
+        return hidden_states

@@ -53,7 +53,7 @@ class convolutional_block(nn.Module):
         else:
             self.residual = nn.MaxPool1d(kernel_size=1, stride=stride)
 
-    def forward(self, hidden_states, input_len):
+    def forward(self, hidden_states):
         # hidden_states  (batch_size, seq_len, input_dims)
 
         # transpose input for convolution
@@ -72,6 +72,4 @@ class convolutional_block(nn.Module):
 
         convoluted = self.act(out + residual_part)
 
-        input_len = input_len // self.stride
-
-        return convoluted.transpose(1, 2), input_len
+        return convoluted.transpose(1, 2)

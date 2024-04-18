@@ -110,15 +110,8 @@ class local_attention_block(nn.Module):
             positional_embeding=positional_embeding,
         )
 
-    def forward(self, hidden_states, input_len):
+    def forward(self, hidden_states):
 
-        batch_size, seq_len, input_dims = hidden_states.shape
-        device = hidden_states.device
+        hidden_states = self.model(hidden_states)
 
-        mask = torch.where(
-            torch.arange(seq_len, device=device) < input_len[:, None], 1, 0
-        ).bool()
-
-        hidden_states = self.model(hidden_states,mask)
-
-        return hidden_states, input_len
+        return hidden_states

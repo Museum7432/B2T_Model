@@ -94,12 +94,10 @@ class B2T_stack(L.LightningModule):
 
         self.output_dims = self.layers[-1].output_dims
 
-    def forward(self, hidden_states, input_len=None):
+    def forward(self, hidden_states):
         for layer in self.layers:
-            hidden_states, input_len = layer(hidden_states, input_len)
-        # cu_seqlens is not available in mamba yet
-        # and is only used by the attention block
-        return hidden_states, input_len
+            hidden_states = layer(hidden_states)
+        return hidden_states
 
 
 class BaseModel(L.LightningModule):
@@ -117,6 +115,15 @@ class BaseModel(L.LightningModule):
         return num_steps
 
     def configure_optimizers(self):
+
+        if self.trainer.max_epochs == -1:
+            self.optimizer = torch.optim.AdamW(
+                self.parameters(),
+                lr=self.config.optimizer.peak_lr
+            )
+
+            return self.optimizer
+
         betas = (self.config.optimizer.beta_1, self.config.optimizer.beta_2)
 
         self.optimizer = torch.optim.AdamW(
@@ -188,10 +195,10 @@ class B2T_CTC(BaseModel):
         # 2: masked
         # since mamba has not support masking out padded inputs
         self.mask_tokens = nn.Embedding(
-            num_embeddings=3, embedding_dim=256, padding_idx=1
+            num_embeddings=3, embedding_dim=256 #, padding_idx=1
         )
 
-    def forward(self, spikePow, spikePow_len, spikePow_mask):
+    def forward(self, spikePow, spikePow_mask):
         # _input (batch_size, input_len, input_channels)
 
         mask_embeddings = self.mask_tokens(spikePow_mask)
@@ -199,21 +206,24 @@ class B2T_CTC(BaseModel):
         # assume spikePow is padded and masked with 0
         spikePow = spikePow + mask_embeddings
 
-        hidden_states, output_len = self.encoder(spikePow, spikePow_len)
+        hidden_states = self.encoder(spikePow)
 
         if self.phoneme_rec:
             res = self.linear_ph(hidden_states)
         else:
             res = self.linear_ch(hidden_states)
 
-        return res.log_softmax(-1), output_len
+        return res.log_softmax(-1)
 
     def calc_loss(self, batch):
-        res, output_len = self(
+        res = self(
             spikePow=batch["spikePow"],
-            spikePow_len=batch["spikePow_len"],
             spikePow_mask=batch["spikePow_mask"],
         )
+
+        output_len = [len(a) for a in res]
+
+        output_len = torch.tensor(output_len, device=self.device)
 
         if self.phoneme_rec:
             loss = F.ctc_loss(
@@ -230,12 +240,12 @@ class B2T_CTC(BaseModel):
                 batch["sent_ids_len"] - 1,  # remove the eos token
             )
 
-        return loss, res, output_len
+        return loss, res
 
     def training_step(self, batch):
         # TODO: mask part of the input
 
-        loss, res, output_len = self.calc_loss(batch)
+        loss, res = self.calc_loss(batch)
 
         self.log("train_loss", loss.detach(), prog_bar=True)
 
@@ -247,7 +257,7 @@ class B2T_CTC(BaseModel):
 
     def validation_step(self, batch):
 
-        loss, res, output_len = self.calc_loss(batch)
+        loss, res = self.calc_loss(batch)
 
         self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
 
@@ -280,9 +290,8 @@ class B2T_CTC(BaseModel):
         self.test_pred = []
 
     def test_step(self, batch):
-        res, output_len = self(
+        res = self(
             spikePow=batch["spikePow"],
-            spikePow_len=batch["spikePow_len"],
             spikePow_mask=batch["spikePow_mask"],
         )
 
@@ -340,29 +349,28 @@ class B2T_Model(BaseModel):
             num_embeddings=3, embedding_dim=256, padding_idx=1
         )
 
-    def forward(self, spikePow, spikePow_len, spikePow_mask):
+    def forward(self, spikePow, spikePow_mask):
         # spikePow (batch_size, input_len, input_channels)
         mask_embeddings = self.mask_tokens(spikePow_mask)
 
         # assume spikePow is padded and masked with 0
         spikePow = spikePow + mask_embeddings
 
-        hidden_states, output_len = self.encoder(spikePow, spikePow_len)
+        hidden_states = self.encoder(spikePow)
 
         if self.second_enc is not None:
-            hidden_states, output_len = self.second_enc(hidden_states, output_len)
+            hidden_states = self.second_enc(hidden_states)
 
         if self.phoneme_rec:
             logits = self.linear_ph(hidden_states)
         else:
             logits = self.linear_ch(hidden_states)
 
-        return logits, output_len
+        return logits
 
     def calc_loss(self, batch):
-        logits, input_len = self(
+        logits = self(
             spikePow=batch["spikePow"],
-            spikePow_len=batch["spikePow_len"],
             spikePow_mask=batch["spikePow_mask"],
         )
 
@@ -432,9 +440,8 @@ class B2T_Model(BaseModel):
         self.test_pred = []
 
     def test_step(self, batch):
-        res, output_len = self(
+        res = self(
             spikePow=batch["spikePow"],
-            spikePow_len=batch["spikePow_len"],
             spikePow_mask=batch["spikePow_mask"],
         )
 

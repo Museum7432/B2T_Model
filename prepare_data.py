@@ -4,7 +4,6 @@ import os
 import numpy as np
 
 from src.utils import (
-    unscrambleChans,
     phonemize_text,
     phonetic_tokenize,
     clean_text,

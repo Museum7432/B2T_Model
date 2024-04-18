@@ -409,9 +409,9 @@ class mamba_block(nn.Module):
                 bidirectional=bidirectional,
             )
         )
-    def forward(self, hidden_states, input_len=None):
+    def forward(self, hidden_states):
         # cu_seqlens is not available in mamba yet
 
         hidden_states = self.model(hidden_states)
 
-        return hidden_states, input_len
+        return hidden_states

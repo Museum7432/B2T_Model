@@ -79,7 +79,7 @@ class concatenate_consecutive(nn.Module):
         else:
             self._projection = nn.Identity()
 
-    def forward(self, hidden_states, input_len):
+    def forward(self, hidden_states):
         # hidden_states  (batch_size, seq_len, input_dims)
 
         batch_size, seq_len, input_dims = hidden_states.shape
@@ -97,6 +97,4 @@ class concatenate_consecutive(nn.Module):
         # (batch_size, seq_len//group_size, output_dims)
         hidden_states = self._projection(hidden_states)
 
-        input_len = input_len // self.group_size
-
-        return hidden_states, input_len
+        return hidden_states
