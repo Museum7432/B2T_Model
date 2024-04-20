@@ -33,36 +33,68 @@ encoder:
     - - "conv"
       - 256
       - 512
-      - 2
-      - 1024
-    
+      - 1
+
+    - - "conv"
+      - 512
+      - 512
+      - 1
+
+    - - "conv"
+      - 512
+      - 512
+      - 1
+
+    - - "conv"
+      - 512
+      - 512
+      - 1
+
+    - - "conv"
+      - 512
+      - 512
+      - 1
+
     - - "conv"
       - 512
       - 512
       - 2
-      - 1024
+
+    - - "conv"
+      - 512
+      - 512
+      - 2
 
     - - "mamba"
       - 512
-      - 8
-      - false
+      - 4
+      - true
 
 decoder:
   phoneme_vocab_size: 46
   character_vocab_size: 29
 
   # not used by the ctc decoder
-  # layers:
-  #   - - "attention"
-  #     - 512
-  #     - 3
-  #     - 64
-  #     - false
+  layers:
+    - - "mamba"
+      - 512
+      - 2
+      - true
+    - - "conv"
+      - 512
+      - 512
+      - 2
+      - 512
+    - - "mamba"
+      - 512
+      - 4
+      - true
+  output_dims: 512
 
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
-  peak_lr: 1e-4
+  peak_lr: 5e-4
   last_lr: 5e-6
   beta_1: 0.9
   beta_2: 0.95

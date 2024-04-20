@@ -3,7 +3,9 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torchmetrics.text import WordErrorRate
+
+# from torchmetrics.text import WordErrorRate
+import torchmetrics
 import pathlib
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -17,7 +19,6 @@ import numpy as np
 
 from .modules.mamba import mamba_block
 from .modules.conv import convolutional_block
-from .modules.concat import concatenate_consecutive
 from .modules.pooling import consecutive_pooling
 from .modules.local_attention import local_attention_block
 
@@ -45,20 +46,12 @@ class B2T_stack(L.LightningModule):
                         bidirectional=bidirectional,
                     )
                 )
-            elif l[0] == "concat":
-                _, in_dims, out_dims, group_size = l
-
-                modules_list.append(
-                    concatenate_consecutive(
-                        input_dims=in_dims, output_dims=out_dims, group_size=group_size
-                    )
-                )
             elif l[0] == "pooling":
-                _, pooling_type, group_size = l
+                _, pooling_type, kernel_size, stride = l
 
                 modules_list.append(
                     consecutive_pooling(
-                        pooling_type=pooling_type, group_size=group_size
+                        pooling_type=pooling_type, kernel_size=kernel_size, stride=stride
                     )
                 )
             elif l[0] == "conv":
@@ -118,8 +111,7 @@ class BaseModel(L.LightningModule):
 
         if self.trainer.max_epochs == -1:
             self.optimizer = torch.optim.AdamW(
-                self.parameters(),
-                lr=self.config.optimizer.peak_lr
+                self.parameters(), lr=self.config.optimizer.peak_lr
             )
 
             return self.optimizer
@@ -195,7 +187,7 @@ class B2T_CTC(BaseModel):
         # 2: masked
         # since mamba has not support masking out padded inputs
         self.mask_tokens = nn.Embedding(
-            num_embeddings=3, embedding_dim=256 #, padding_idx=1
+            num_embeddings=3, embedding_dim=256  # , padding_idx=1
         )
 
     def forward(self, spikePow, spikePow_mask):
@@ -264,11 +256,16 @@ class B2T_CTC(BaseModel):
         self.val_pred += res.argmax(dim=-1).cpu().tolist()
 
         if self.phoneme_rec:
-            self.val_tar += batch["phonemized"]
+            self.val_tar += (
+                batch["phonemized"]
+            )
         else:
             self.val_tar += batch["sent"]
 
     def on_validation_epoch_end(self):
+
+
+        self.val_tar = [s.replace("_", "").replace("+", "").replace("-", "") for s in self.val_tar]
 
         if self.phoneme_rec:
             dec = phonetic_decode
@@ -276,9 +273,11 @@ class B2T_CTC(BaseModel):
             dec = decode
 
         raw_pred = [dec(s) for s in self.val_pred]
-        pred = [dec(s, True) for s in self.val_pred]
+        pred = [dec(s, True).replace("_", "") for s in self.val_pred]
+        
+        wer = torchmetrics.functional.text.word_error_rate(pred, self.val_tar)
 
-        pred = [s.replace("_", "") for s in pred]
+        self.log("wer", wer, prog_bar=True)
 
         with open("valid.txt", "w") as txt_file:
             for i in range(len(self.val_pred)):
@@ -340,13 +339,14 @@ class B2T_Model(BaseModel):
             self.linear_ph = nn.Linear(output_dims, config.decoder.phoneme_vocab_size)
         else:
             self.linear_ch = nn.Linear(output_dims, config.decoder.character_vocab_size)
-        
+
         # 0: padding
         # 1: input
         # 2: masked
         # since mamba has not support masking out padded inputs
         self.mask_tokens = nn.Embedding(
-            num_embeddings=3, embedding_dim=256, padding_idx=1
+            num_embeddings=3,
+            embedding_dim=256,  # padding_idx=1
         )
 
     def forward(self, spikePow, spikePow_mask):

@@ -8,15 +8,11 @@ encoder:
     #   - input_channels: int
     #   - n_layer: int
     #   - bidirectional: bool
-
-    # - - "concat"
-    #   - input_dims
-    #   - output_dims
-    #   - group_size
-
+    
     # - - "pooling"
     #   - pooling_type
-    #   - group_size
+    #   - kernel_size
+    #   - stride
 
     # - - "conv"
     #   - in_dims

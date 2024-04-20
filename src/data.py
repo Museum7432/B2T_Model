@@ -14,58 +14,64 @@ from .utils import (
     tokenize,
 )
 
+
 # https://stackoverflow.com/questions/3589214/generate-random-numbers-summing-to-a-predefined-value
-def constrained_sum_sample_pos(n, total, low = 0):
+def constrained_sum_sample_pos(n, total, low=0):
     """Return a randomly chosen list of n positive integers summing to total.
     Each such list is equally likely to occur."""
 
-    dividers = sorted(np.random.choice(np.arange(1, total - (low-1)*n), n - 1, replace=False))
+    dividers = sorted(
+        np.random.choice(np.arange(1, total - (low - 1) * n), n - 1, replace=False)
+    )
 
-    return [a - b + low - 1 for a, b in zip(dividers + [total - (low-1)*n], [0] + dividers)]
+    return [
+        a - b + low - 1
+        for a, b in zip(dividers + [total - (low - 1) * n], [0] + dividers)
+    ]
+
+
+def plit_sections(num_sections, size, low=0):
+    lens = [0] + constrained_sum_sample_pos(num_sections, size, low)
+
+    _starts = np.cumsum(lens[:-1])
+    _ends = np.cumsum(lens[1:])
+
+    return np.vstack([_starts, _ends]).T
+
 
 def plit_spikePow(spikePow, spikePow_mask, total_pad):
-    # use pad token to partition input into 4 sections
-    # TODO: the number of sections should be randomized
-    # https://stackoverflow.com/questions/51918580/python-random-list-of-numbers-in-a-range-keeping-with-a-minimum-distance
+    # use pad token to partition input into sections
     seq_len, channel_dim = spikePow.shape
+
     min_section_len = int(seq_len * 0.08)
-    num_sections = 3
+    num_sections = np.random.randint(6) + 1
 
-    m = seq_len - (num_sections + 1) * (min_section_len - 1)
-
-    indices = [(min_section_len - 1) * (i + 1) + x for i, x in enumerate(sorted(np.random.choice(m, num_sections - 1)))]
-
-
-    sections = np.split(
-        spikePow,
-        indices_or_sections=indices
-    )
-
-    sections_mask = np.split(
-        spikePow_mask,
-        indices_or_sections=indices
-    )
+    section_ids = plit_sections(num_sections, seq_len, min_section_len)
 
     pad_lens = constrained_sum_sample_pos(num_sections + 1, total_pad)
-    
+
     padded_sections = []
     padded_sections_mask = []
 
     for i in range(num_sections):
-        section = sections[i]
-        section_mask = sections_mask[i]
+        pad_len = pad_lens[i + 1]
 
-        pad_len  = pad_lens[i + 1]
+        s_start, s_end = section_ids[i]
 
         section = np.pad(
-            section, ((0, pad_len), (0, 0)), "constant", constant_values=0
+            spikePow[s_start:s_end],
+            ((0, pad_len), (0, 0)),
+            "constant",
+            constant_values=0,
         )
 
-        section_mask = np.pad(section_mask, (0, pad_len), constant_values=0)
-        
+        section_mask = np.pad(
+            spikePow_mask[s_start:s_end], (0, pad_len), constant_values=0
+        )
+
         padded_sections.append(section)
         padded_sections_mask.append(section_mask)
-    
+
     spikePow = np.vstack(padded_sections)
     spikePow_mask = np.concatenate(padded_sections_mask)
 
@@ -77,39 +83,19 @@ def plit_spikePow(spikePow, spikePow_mask, total_pad):
     return spikePow, spikePow_mask
 
 
-
 def add_noises_to_input(spikePow, spikePow_mask):
+    seq_len, channel_dim = spikePow.shape
+
     if np.random.rand() < 0.025:
         return spikePow, spikePow_mask
 
     # assume spikePow has mean=0 and std=1 after block normalization
-    seq_len, channel_dim = spikePow.shape
+    min_section_len = int(seq_len * 0.06)
+    num_sections = np.random.randint(6) + 1
+    section_ids = plit_sections(num_sections, seq_len, min_section_len)
 
-    new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(
-        spikePow.dtype
-    )
-    new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(
-        spikePow.dtype
-    )
-
-    base = spikePow * new_std + new_mean
-
-    if np.random.rand() < 0.2:
-        return base, spikePow_mask
-    
-    return base, spikePow_mask
-
-    # now add more noises into part of the array
-
-    if np.random.rand() < 0.025:
-        return base, spikePow_mask
-
-    for _ in range(6):
-        selected = np.random.rand(seq_len) < 0.5
-
-        if selected.sum() == 0:
-            continue
-
+    sections = []
+    for s, e in section_ids:
         new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(
             spikePow.dtype
         )
@@ -117,8 +103,13 @@ def add_noises_to_input(spikePow, spikePow_mask):
             spikePow.dtype
         )
 
-        base[selected] = spikePow[selected] * new_std + new_mean
-        # base[selected] = base[selected] * new_std + new_mean
+        sections.append(
+            spikePow[s:e] * new_std + new_mean
+        )
+
+    base = np.vstack(sections)
+
+    return base, spikePow_mask
 
     # and finally mask section of the input
 
@@ -187,7 +178,6 @@ class B2T_Dataset(Dataset):
 
         # idx2 = None
 
-
         if idx2 is not None:
             _start, _end = self.spikePow_indices[idx2]
             spikePow2 = spikePows[_start:_end]
@@ -205,7 +195,7 @@ class B2T_Dataset(Dataset):
         else:
             sentenceText = None
             phonemizedText = None
-        
+
         if idx2 is not None:
             sentenceText2 = self.sentenceTexts[idx2]
             # assume there is a silent before and after the text is spoken
@@ -233,9 +223,9 @@ class B2T_Dataset(Dataset):
         if not self.has_labels:
             return re
 
-        sentenceText = sentenceText + "_"
-
         tokenized = tokenize(sentenceText)
+
+        tokenized = [1] + tokenized + [1, 0]
 
         re["sent"] = sentenceText
 
@@ -244,7 +234,7 @@ class B2T_Dataset(Dataset):
 
         ph = phonetic_tokenize(phonemizedText)
 
-        ph += [0]
+        ph = [1] + ph + [1, 0]
 
         re["phonemized"] = phonemizedText
         re["phonemize_ids"] = ph
@@ -307,14 +297,13 @@ def collate_fn_factory(add_noises=False):
         for f, v in zip(fields_to_pad, pad_values):
             if f in batch.keys():
                 batch[f] = _pad(batch[f], constant_values=v)
-        
+
         # pad spikePow and spikePow_mask
-        target_length = max([len(i) for i in batch["spikePow"]])
+        # spikePow should always be padded
+        target_length = max([len(i) for i in batch["spikePow"]]) + 20
 
         for i in range(len(batch["spikePow"])):
             additional = target_length - len(batch["spikePow"][i])
-            if additional == 0:
-                continue
 
             if add_noises:
                 spikePow, spikePow_mask = plit_spikePow(
@@ -324,15 +313,20 @@ def collate_fn_factory(add_noises=False):
                 batch["spikePow_mask"][i] = spikePow_mask
 
             else:
-                _start = 0
+                _start = additional // 2
                 _end = additional - _start
 
                 batch["spikePow"][i] = np.pad(
-                    batch["spikePow"][i], ((_start, _end), (0, 0)), "constant", constant_values=0
+                    batch["spikePow"][i],
+                    ((_start, _end), (0, 0)),
+                    "constant",
+                    constant_values=0,
                 )
 
-                batch["spikePow_mask"][i] = np.pad(batch["spikePow_mask"][i], (_start, _end), constant_values=0)
-        
+                batch["spikePow_mask"][i] = np.pad(
+                    batch["spikePow_mask"][i], (_start, _end), constant_values=0
+                )
+
         batch["spikePow"] = np.array(batch["spikePow"])
         batch["spikePow_mask"] = np.array(batch["spikePow_mask"])
 

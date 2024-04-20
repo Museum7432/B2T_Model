@@ -33,84 +33,42 @@ encoder:
     - - "conv"
       - 256
       - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
       - 2
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 2
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
-
-    - - "conv"
-      - 512
-      - 512
-      - 1
 
     - - "mamba"
       - 512
-      - 3
+      - 6
       - true
+
+    - - "conv"
+      - 512
+      - 512
+      - 2
+
+    # - - "conv"
+    #   - 512
+    #   - 512
+    #   - 2
 
 decoder:
   phoneme_vocab_size: 46
   character_vocab_size: 29
 
   # not used by the ctc decoder
-  # layers:
-  #   - - "attention"
-  #     - 512
-  #     - 3
-  #     - 64
-  #     - false
+  layers:
+    - - "mamba"
+      - 512
+      - 2
+      - true
+    - - "conv"
+      - 512
+      - 512
+      - 2
+      - 512
+    - - "mamba"
+      - 512
+      - 4
+      - true
 
 
 optimizer:

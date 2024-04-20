@@ -3,33 +3,22 @@ from torch import nn
 from torch.nn import functional as F
 
 class consecutive_pooling(nn.Module):
-    def __init__(self, pooling_type="max", group_size=2):
+    def __init__(self, pooling_type="max", kernel_size=3, stride=2):
         """perform pooling over group_size consecutive inputs"""
         super(consecutive_pooling, self).__init__()
         self.pooling_type = pooling_type
-        self.group_size = group_size
+        self.kernel_size = kernel_size
 
-        assert pooling_type in ["max", "mean", "min"]
+        assert pooling_type in ["max", "mean"]
+
+        if pooling_type == "max":
+            self.pool = nn.MaxPool1d(kernel_size=kernel_size, stride=stride)
+        elif pooling_type == "mean":
+            self.pool = nn.AvgPool1d(kernel_size=kernel_size, stride=stride)
 
     def forward(self, hidden_states):
-        # hidden_states  (batch_size, seq_len, input_dims)
-        batch_size, seq_len, input_dims = hidden_states.shape
-        assert seq_len % self.group_size == 0
+        hidden_states = hidden_states.transpose(1, 2)
 
-        # (batch_size, seq_len//group_size, group_size, input_dims)
-        hidden_states = hidden_states.reshape(
-            (batch_size, seq_len // self.group_size, self.group_size, input_dims)
-        )
-
-        # (batch_size, seq_len//2, input_dims, 2)
-        hidden_states = hidden_states.transpose(2, 3)
-
-        # (batch_size, seq_len//2, input_dims)
-        if self.pooling_type == "max":
-            hidden_states = hidden_states.max(-1).values
-        elif self.pooling_type == "min":
-            hidden_states = hidden_states.min(-1).values
-        else:
-            hidden_states = hidden_states.mean(-1)
-
-        return hidden_states
+        hidden_states = self.pool(hidden_states)
+        
+        return hidden_states.transpose(1, 2)
