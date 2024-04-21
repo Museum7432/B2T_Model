@@ -1,6 +1,7 @@
 import lightning as L
 from torch.utils.data import DataLoader, IterableDataset, Dataset
 import scipy.io as sio
+from scipy import signal
 import scipy
 import os
 import numpy as np
@@ -103,12 +104,34 @@ def add_noises_to_input(spikePow, spikePow_mask):
             spikePow.dtype
         )
 
+        # sections.append(
+        #     spikePow[s:e] * new_std + new_mean
+        # )
+
+        ratio = np.random.rand()/5 + 0.9
+
+        new_len = int((e - s + 1) * ratio)
+
+        sec = signal.resample(spikePow[s:e], new_len)
+
         sections.append(
-            spikePow[s:e] * new_std + new_mean
+            sec * new_std + new_mean
         )
 
-    base = np.vstack(sections)
 
+    # resample the input randomly
+    # to make model invariant to words being spoken/thought 
+    # at variable speeds
+    base = np.vstack(sections)
+    spikePow_mask = np.ones(len(base), dtype=int)
+    return base, spikePow_mask
+
+    ratio = np.random.rand()/5 + 0.9
+    new_len = int(seq_len * ratio)
+
+    base = signal.resample(base, new_len)
+    
+    spikePow_mask = np.ones(len(base), dtype=int)
     return base, spikePow_mask
 
     # and finally mask section of the input
@@ -305,27 +328,33 @@ def collate_fn_factory(add_noises=False):
         for i in range(len(batch["spikePow"])):
             additional = target_length - len(batch["spikePow"][i])
 
-            if add_noises:
-                spikePow, spikePow_mask = plit_spikePow(
-                    batch["spikePow"][i], batch["spikePow_mask"][i], additional
-                )
-                batch["spikePow"][i] = spikePow
-                batch["spikePow_mask"][i] = spikePow_mask
+            # randomly split spikePow with paddings, did not work as expected
+            # it is better to just mask part of the input
 
-            else:
+            # spikePow, spikePow_mask = plit_spikePow(
+            #     batch["spikePow"][i], batch["spikePow_mask"][i], additional
+            # )
+            # batch["spikePow"][i] = spikePow
+            # batch["spikePow_mask"][i] = spikePow_mask
+
+
+
+            if not add_noises:
                 _start = additional // 2
-                _end = additional - _start
+            else:
+                _start = np.random.randint(additional + 1)
 
-                batch["spikePow"][i] = np.pad(
-                    batch["spikePow"][i],
-                    ((_start, _end), (0, 0)),
-                    "constant",
-                    constant_values=0,
-                )
+            _end = additional - _start
 
-                batch["spikePow_mask"][i] = np.pad(
-                    batch["spikePow_mask"][i], (_start, _end), constant_values=0
-                )
+            batch["spikePow"][i] = np.pad(
+                batch["spikePow"][i],
+                ((_start, _end), (0, 0)),
+                "constant",
+                constant_values=0,
+            )
+            batch["spikePow_mask"][i] = np.pad(
+                batch["spikePow_mask"][i], (_start, _end), constant_values=0
+            )
 
         batch["spikePow"] = np.array(batch["spikePow"])
         batch["spikePow_mask"] = np.array(batch["spikePow_mask"])

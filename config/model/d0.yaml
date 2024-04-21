@@ -4,54 +4,19 @@ input_dims: 256
 
 encoder:
   layers:
-    # - - "mamba"
-    #   - input_channels: int
-    #   - n_layer: int
-    #   - bidirectional: bool
+    # - ["mamba", input_channels, n_layer, bidirectional]
+    # - ["resnet", in_dims, out_dims, stride, hidden_size]
+    # - ["pooling", pooling_type, kernel_size, stride]
+    # - ["attention", input_dims, n_layer, local_attn_window_size, positional_embeding]
+    # - ["highway", input_dim, num_layers]
+    # - ["conv", input_dims, output_dims, kernel_size, stride, groups]
 
-    # - - "concat"
-    #   - input_dims
-    #   - output_dims
-    #   - group_size
-
-    # - - "pooling"
-    #   - pooling_type
-    #   - group_size
-
-    # - - "conv"
-    #   - in_dims
-    #   - out_dims
-    #   - stride
-
-    # - - "attention"
-    #   - input_dims
-    #   - n_layer
-    #   - local_attn_window_size
-    #   - positional_embeding
-
-    - - "conv"
-      - 256
-      - 512
-      - 1
-    - - "conv"
-      - 512
-      - 512
-      - 2
-
-    - - "mamba"
-      - 512
-      - 4
-      - true
-
-    - - "conv"
-      - 512
-      - 512
-      - 2
-
-    - - "mamba"
-      - 512
-      - 2
-      - true
+    # depthwise conv
+    - ["conv", 256, 768, 5, 1, 256]
+    - ["highway", 768, 2]
+    - ["conv", 768, 512, 3, 2, 1]
+    - ["conv", 512, 512, 3, 2, 1]
+    - ["mamba", 512, 6, true]
 
 decoder:
   phoneme_vocab_size: 46
@@ -59,14 +24,9 @@ decoder:
 
   # not used by the ctc decoder
   layers:
-    - - "conv"
-      - 512
-      - 512
-      - 2
-    - - "mamba"
-      - 512
-      - 4
-      - true
+    - ["mamba", 512, 2, true]
+    - ["resnet", 512, 512, 2]
+    - ["mamba", 512, 4, true]
   output_dims: 512
 
 

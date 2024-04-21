@@ -18,7 +18,9 @@ from .utils import phonetic_decode, decode
 import numpy as np
 
 from .modules.mamba import mamba_block
-from .modules.conv import convolutional_block
+from .modules.highway import Highway
+from .modules.conv import conv_block
+from .modules.resnet import resnet_block
 from .modules.pooling import consecutive_pooling
 from .modules.local_attention import local_attention_block
 
@@ -51,10 +53,12 @@ class B2T_stack(L.LightningModule):
 
                 modules_list.append(
                     consecutive_pooling(
-                        pooling_type=pooling_type, kernel_size=kernel_size, stride=stride
+                        pooling_type=pooling_type,
+                        kernel_size=kernel_size,
+                        stride=stride,
                     )
                 )
-            elif l[0] == "conv":
+            elif l[0] == "resnet":
                 if len(l) == 5:
                     _, in_dims, out_dims, stride, hidden_size = l
                 else:
@@ -62,7 +66,7 @@ class B2T_stack(L.LightningModule):
                     hidden_size = None
 
                 modules_list.append(
-                    convolutional_block(
+                    resnet_block(
                         input_dims=in_dims,
                         output_dims=out_dims,
                         stride=stride,
@@ -80,6 +84,16 @@ class B2T_stack(L.LightningModule):
                         positional_embeding=positional_embeding,
                     )
                 )
+            elif l[0] == "highway":
+                _, in_channels, n_layer = l
+                modules_list.append(Highway(input_dim=in_channels, num_layers=n_layer))
+
+            elif l[0] == "conv":
+                _, input_dims, output_dims, kernel_size, stride, groups = l
+                modules_list.append(
+                    conv_block(input_dims, output_dims, kernel_size, stride, groups)
+                )
+
             else:
                 raise ValueError(f"unknown layer: {l[0]}")
 
@@ -256,16 +270,15 @@ class B2T_CTC(BaseModel):
         self.val_pred += res.argmax(dim=-1).cpu().tolist()
 
         if self.phoneme_rec:
-            self.val_tar += (
-                batch["phonemized"]
-            )
+            self.val_tar += batch["phonemized"]
         else:
             self.val_tar += batch["sent"]
 
     def on_validation_epoch_end(self):
 
-
-        self.val_tar = [s.replace("_", "").replace("+", "").replace("-", "") for s in self.val_tar]
+        self.val_tar = [
+            s.replace("_", "").replace("+", "").replace("-", "") for s in self.val_tar
+        ]
 
         if self.phoneme_rec:
             dec = phonetic_decode
@@ -274,7 +287,7 @@ class B2T_CTC(BaseModel):
 
         raw_pred = [dec(s) for s in self.val_pred]
         pred = [dec(s, True).replace("_", "") for s in self.val_pred]
-        
+
         wer = torchmetrics.functional.text.word_error_rate(pred, self.val_tar)
 
         self.log("wer", wer, prog_bar=True)
