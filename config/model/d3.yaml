@@ -11,27 +11,27 @@ encoder:
     # - ["highway", input_dim, num_layers]
     # - ["conv", input_dims, output_dims, kernel_size, stride, groups]
 
-    # depthwise conv
-    - ["conv", 256, 768, 3, 2, 1]
-    - ["conv", 768, 768, 3, 2, 1]
-    - ["mamba", 768, 6, true]
+    - ["mamba", 256, 2, true]
+    - ["conv", 256, 512, 3, 2, 1]
+    - ["mamba", 512, 2, true]
+    - ["conv", 512, 512, 3, 2, 1]
+    - ["mamba", 512, 4, true]
 
 decoder:
-  phoneme_vocab_size: 47
-  character_vocab_size: 30
+  phoneme_vocab_size: 46
+  character_vocab_size: 29
 
-  # # not used by the ctc decoder
-  # layers:
-  #   - ["mamba", 512, 2, true]
-  #   - ["resnet", 512, 512, 2]
-  #   - ["mamba", 512, 4, true]
-  
-  t5_num_encoder_layers: 3
-  t5_num_decoder_layers: 3
+  # not used by the ctc decoder
+  layers:
+    - ["mamba", 512, 2, true]
+    - ["resnet", 512, 512, 2]
+    - ["mamba", 512, 4, true]
+  output_dims: 512
+
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
-  peak_lr: 2e-4
+  peak_lr: 5e-4
   last_lr: 5e-6
   beta_1: 0.9
   beta_2: 0.95

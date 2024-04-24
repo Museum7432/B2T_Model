@@ -5,6 +5,7 @@ input_dims: 256
 encoder:
   layers:
     # - ["mamba", input_channels, n_layer, bidirectional]
+    # - ["t5", input_channels, n_layer]
     # - ["resnet", in_dims, out_dims, stride, hidden_size]
     # - ["pooling", pooling_type, kernel_size, stride]
     # - ["attention", input_dims, n_layer, local_attn_window_size, positional_embeding]
@@ -12,20 +13,22 @@ encoder:
     # - ["conv", input_dims, output_dims, kernel_size, stride, groups]
 
     # depthwise conv
-    - ["conv", 256, 512, 4, 2, 1]
-    - ["conv", 512, 512, 4, 2, 1]
-    - ["mamba", 512, 6, true]
+    - ["conv", 256, 512, 3, 2, 1]
+    - ["conv", 512, 512, 3, 2, 1]
+    - ["t5", 512, 6]
 
 decoder:
-  phoneme_vocab_size: 46
-  character_vocab_size: 29
+  phoneme_vocab_size: 47
+  character_vocab_size: 30
 
   # not used by the ctc decoder
-  layers:
-    - ["mamba", 512, 2, true]
-    - ["resnet", 512, 512, 2]
-    - ["mamba", 512, 4, true]
-  output_dims: 512
+  # layers:
+  #   - ["mamba", 512, 2, true]
+  #   - ["resnet", 512, 512, 2]
+  #   - ["mamba", 512, 4, true]
+  
+  t5_num_encoder_layers: 0
+  t5_num_decoder_layers: 6
 
 
 optimizer:

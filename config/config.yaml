@@ -1,6 +1,8 @@
 hydra:
   job:
     chdir: true
+  run:
+    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S}
 
 defaults:
   - _self_
@@ -39,5 +41,5 @@ trainer:
   # precision: "32-true"
   # accumulate_grad_batches: 1
   val_check_interval: 0.5
-  max_epochs: 5
+  max_epochs: 10
   gradient_clip_val: 1.0

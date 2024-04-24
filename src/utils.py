@@ -9,7 +9,9 @@ import itertools
 # el, em, en, pau not found in trainning dataset
 # _: blank token
 # ' ': silent token
-phoneme_vocab = "_, ,aa,ae,ah,ao,aw,ax,ay,eh,el,em,en,er,ey,ih,iy,ow,oy,uh,uw,b,ch,d,dh,f,g,hh,jh,k,l,m,n,ng,p,r,s,sh,t,th,v,w,y,z,zh,pau".split(
+# _ should be at indice 1 for consistency with the t5 model
+# '+': pad token (not used)
+phoneme_vocab = "+,_, ,aa,ae,ah,ao,aw,ax,ay,eh,el,em,en,er,ey,ih,iy,ow,oy,uh,uw,b,ch,d,dh,f,g,hh,jh,k,l,m,n,ng,p,r,s,sh,t,th,v,w,y,z,zh,pau".split(
     ","
 )
 
@@ -62,7 +64,7 @@ def phonetic_decode(ids, remove_consecutive=False):
 
 
 # for text generation
-vocab = "_ nuclearoktsdyifwhbvxpm'gqjz"
+vocab = "+_ nuclearoktsdyifwhbvxpm'gqjz"
 
 def tokenize(text):
     return [vocab.index(c) for c in text]

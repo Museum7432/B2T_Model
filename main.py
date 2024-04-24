@@ -81,7 +81,7 @@ def main(config: DictConfig):
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     checkpoint_callback = ModelCheckpoint(
-        monitor="valid_loss",
+        monitor="wer",
         mode="min",
         save_top_k=3,
         save_last=True,

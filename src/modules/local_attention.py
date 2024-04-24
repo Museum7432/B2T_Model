@@ -94,7 +94,7 @@ class local_attention_block(nn.Module):
         input_dims=256,
         depth=2,
         local_attn_window_size=64,
-        max_seq_len=1000,
+        max_seq_len=5000,
         positional_embeding=False,
     ):
         super(local_attention_block, self).__init__()
@@ -108,6 +108,7 @@ class local_attention_block(nn.Module):
             local_attn_window_size=local_attn_window_size,
             max_seq_len=max_seq_len,
             positional_embeding=positional_embeding,
+            # use_dynamic_pos_bias=True
         )
 
     def forward(self, hidden_states):

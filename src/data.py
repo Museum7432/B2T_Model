@@ -45,7 +45,7 @@ def plit_spikePow(spikePow, spikePow_mask, total_pad):
     seq_len, channel_dim = spikePow.shape
 
     min_section_len = int(seq_len * 0.08)
-    num_sections = np.random.randint(6) + 1
+    num_sections = np.random.randint(3) + 1
 
     section_ids = plit_sections(num_sections, seq_len, min_section_len)
 
@@ -87,71 +87,61 @@ def plit_spikePow(spikePow, spikePow_mask, total_pad):
 def add_noises_to_input(spikePow, spikePow_mask):
     seq_len, channel_dim = spikePow.shape
 
+    spikePow = spikePow.copy()
+
+    # # add more noises
+    # new_len = seq_len + np.random.randint(3) - 1
+    # spikePow = signal.resample(spikePow, new_len)
+    # spikePow_mask = np.ones(new_len, dtype=int)
+    # seq_len = new_len
+    # # return spikePow, spikePow_mask
+
     if np.random.rand() < 0.025:
         return spikePow, spikePow_mask
-
-    # assume spikePow has mean=0 and std=1 after block normalization
-    min_section_len = int(seq_len * 0.06)
-    num_sections = np.random.randint(6) + 1
-    section_ids = plit_sections(num_sections, seq_len, min_section_len)
-
-    sections = []
-    for s, e in section_ids:
-        new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(
-            spikePow.dtype
-        )
-        new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(
-            spikePow.dtype
-        )
-
-        # sections.append(
-        #     spikePow[s:e] * new_std + new_mean
-        # )
-
-        ratio = np.random.rand()/5 + 0.9
-
-        new_len = int((e - s + 1) * ratio)
-
-        sec = signal.resample(spikePow[s:e], new_len)
-
-        sections.append(
-            sec * new_std + new_mean
-        )
-
-
-    # resample the input randomly
-    # to make model invariant to words being spoken/thought 
-    # at variable speeds
-    base = np.vstack(sections)
-    spikePow_mask = np.ones(len(base), dtype=int)
-    return base, spikePow_mask
-
-    ratio = np.random.rand()/5 + 0.9
-    new_len = int(seq_len * ratio)
-
-    base = signal.resample(base, new_len)
     
-    spikePow_mask = np.ones(len(base), dtype=int)
-    return base, spikePow_mask
+    # assume spikePow has mean=0 and std=1 after block normalization
+    new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(spikePow.dtype)
+    new_std = np.random.normal(loc=1.0, scale=0.25, size=channel_dim).astype(spikePow.dtype)
+
+    spikePow = spikePow * new_std + new_mean
+
+    # min_section_len = int(seq_len * 0.1)
+    # num_sections = np.random.randint(3) + 1
+    # section_ids = plit_sections(num_sections, seq_len, min_section_len)
+
+    # sections = []
+    # for s, e in section_ids:
+    #     new_mean = np.random.normal(loc=0.0, scale=0.35, size=channel_dim).astype(
+    #         spikePow.dtype
+    #     )
+    #     new_std = np.random.normal(loc=1.0, scale=0.35, size=channel_dim).astype(
+    #         spikePow.dtype
+    #     )
+
+    #     sections.append(spikePow[s:e] * new_std + new_mean)
+
+    # spikePow = np.vstack(sections)
+
+    # return spikePow, spikePow_mask
 
     # and finally mask section of the input
 
-    if np.random.rand() < 0.05:
-        return base, spikePow_mask
+    if np.random.rand() < 0.25:
+        return spikePow, spikePow_mask
 
     # for _ in range(np.random.randint(2) + 1):
 
-    mask_length = np.random.randint(64) + 4
+    mask_length = int(seq_len * (np.random.rand() / 8))
     assert seq_len > mask_length
 
     _start = np.random.randint(seq_len - mask_length)
     _end = _start + mask_length
 
-    base[_start:_end] = 0
+    spikePow[_start:_end] = 0
 
     spikePow_mask[_start:_end] = 2
 
-    return base, spikePow_mask
+    return spikePow, spikePow_mask
 
 
 class B2T_Dataset(Dataset):
@@ -238,6 +228,17 @@ class B2T_Dataset(Dataset):
         if self.add_noises:
             spikePow, spikePow_mask = add_noises_to_input(spikePow, spikePow_mask)
 
+        # add eos token to spikePow
+        spikePow = np.pad(
+            spikePow,
+            ((1, 1), (0, 0)),
+            "constant",
+            constant_values=0,
+        )
+        spikePow_mask = np.pad(
+            spikePow_mask, (1, 1), constant_values=3
+        )
+        
         re = {
             "spikePow": spikePow,
             "spikePow_mask": spikePow_mask,
@@ -248,7 +249,8 @@ class B2T_Dataset(Dataset):
 
         tokenized = tokenize(sentenceText)
 
-        tokenized = [1] + tokenized + [1, 0]
+        # tokenized = [2] + tokenized + [2, 1]
+        tokenized = tokenized + [1]
 
         re["sent"] = sentenceText
 
@@ -257,7 +259,10 @@ class B2T_Dataset(Dataset):
 
         ph = phonetic_tokenize(phonemizedText)
 
-        ph = [1] + ph + [1, 0]
+        # ph = [2] + ph + [2, 1]
+        # 0: pad
+        # 1: eos
+        ph = ph + [1]
 
         re["phonemized"] = phonemizedText
         re["phonemize_ids"] = ph
@@ -309,8 +314,6 @@ def collate_fn_factory(add_noises=False):
         )
 
     def collate_fn(items):
-        # TODO: use variable block_size to reduce overfitting
-
         batch = {}
 
         for f in batch_fields:
@@ -323,7 +326,9 @@ def collate_fn_factory(add_noises=False):
 
         # pad spikePow and spikePow_mask
         # spikePow should always be padded
-        target_length = max([len(i) for i in batch["spikePow"]]) + 20
+        target_length = max([len(i) for i in batch["spikePow"]]) + 4
+        if add_noises:
+            target_length += np.random.randint(10)
 
         for i in range(len(batch["spikePow"])):
             additional = target_length - len(batch["spikePow"][i])
@@ -331,18 +336,20 @@ def collate_fn_factory(add_noises=False):
             # randomly split spikePow with paddings, did not work as expected
             # it is better to just mask part of the input
 
-            # spikePow, spikePow_mask = plit_spikePow(
-            #     batch["spikePow"][i], batch["spikePow_mask"][i], additional
-            # )
-            # batch["spikePow"][i] = spikePow
-            # batch["spikePow_mask"][i] = spikePow_mask
+            # if add_noises:
+            #     spikePow, spikePow_mask = plit_spikePow(
+            #         batch["spikePow"][i], batch["spikePow_mask"][i], additional
+            #     )
+            #     batch["spikePow"][i] = spikePow
+            #     batch["spikePow_mask"][i] = spikePow_mask
+                
+            #     continue
 
-
-
-            if not add_noises:
-                _start = additional // 2
-            else:
-                _start = np.random.randint(additional + 1)
+            # if not add_noises:
+            #     _start = additional // 2
+            # else:
+            #     _start = np.random.randint(additional + 1)
+            _start = additional // 2
 
             _end = additional - _start
 

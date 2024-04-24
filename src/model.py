@@ -23,6 +23,7 @@ from .modules.conv import conv_block
 from .modules.resnet import resnet_block
 from .modules.pooling import consecutive_pooling
 from .modules.local_attention import local_attention_block
+from .modules.t5_encoder import t5_encoder
 
 
 class B2T_stack(L.LightningModule):
@@ -80,7 +81,6 @@ class B2T_stack(L.LightningModule):
                         input_dims=in_dims,
                         depth=depth,
                         local_attn_window_size=local_attn_window_size,
-                        max_seq_len=1000,
                         positional_embeding=positional_embeding,
                     )
                 )
@@ -93,7 +93,9 @@ class B2T_stack(L.LightningModule):
                 modules_list.append(
                     conv_block(input_dims, output_dims, kernel_size, stride, groups)
                 )
-
+            elif l[0] == "t5":
+                _, input_dims, n_layer = l
+                modules_list.append(t5_encoder(input_dims, n_layer))
             else:
                 raise ValueError(f"unknown layer: {l[0]}")
 
@@ -199,9 +201,10 @@ class B2T_CTC(BaseModel):
         # 0: padding
         # 1: input
         # 2: masked
+        # 3: eos token
         # since mamba has not support masking out padded inputs
         self.mask_tokens = nn.Embedding(
-            num_embeddings=3, embedding_dim=256  # , padding_idx=1
+            num_embeddings=4, embedding_dim=256, padding_idx=1
         )
 
     def forward(self, spikePow, spikePow_mask):
@@ -237,6 +240,8 @@ class B2T_CTC(BaseModel):
                 batch["phonemize_ids"],
                 output_len,
                 batch["phonemize_ids_len"] - 1,  # remove the eos token
+                blank=1,
+                zero_infinity=True,
             )
         else:
             loss = F.ctc_loss(
@@ -244,6 +249,8 @@ class B2T_CTC(BaseModel):
                 batch["sent_ids"],
                 output_len,
                 batch["sent_ids_len"] - 1,  # remove the eos token
+                blank=1,
+                zero_infinity=True,
             )
 
         return loss, res
@@ -327,6 +334,23 @@ class B2T_CTC(BaseModel):
         self.test_pred = []
 
 
+from transformers.models.t5.configuration_t5 import T5Config
+from transformers.models.t5.modeling_t5 import (
+    T5Stack,
+    T5ForConditionalGeneration,
+    T5PreTrainedModel,
+)
+
+
+def get_t5_config(input_dims, num_layers, num_decoder_layers, vocab_size):
+    base_config = T5Config.from_pretrained("google-t5/t5-base")
+    base_config.d_model = input_dims
+    base_config.num_layers = num_layers
+    base_config.num_decoder_layers = num_decoder_layers
+    base_config.vocab_size = vocab_size
+    return base_config
+
+
 class B2T_Model(BaseModel):
     def __init__(self, config: DictConfig, phoneme_rec=False):
         # phoneme_rec: recognize phoneme or character
@@ -349,20 +373,29 @@ class B2T_Model(BaseModel):
             self.second_enc = None
 
         if phoneme_rec:
-            self.linear_ph = nn.Linear(output_dims, config.decoder.phoneme_vocab_size)
+            vocab_size = config.decoder.phoneme_vocab_size
         else:
-            self.linear_ch = nn.Linear(output_dims, config.decoder.character_vocab_size)
+            vocab_size = config.decoder.character_vocab_size
+
+        t5_config = get_t5_config(
+            input_dims=output_dims,
+            num_layers=config.decoder.t5_num_encoder_layers,
+            num_decoder_layers=config.decoder.t5_num_decoder_layers,
+            vocab_size=vocab_size,
+        )
+
+        self.t5_model = T5ForConditionalGeneration(t5_config)
 
         # 0: padding
         # 1: input
         # 2: masked
+        # 3: eos token
         # since mamba has not support masking out padded inputs
         self.mask_tokens = nn.Embedding(
-            num_embeddings=3,
-            embedding_dim=256,  # padding_idx=1
+            num_embeddings=4, embedding_dim=256, padding_idx=1
         )
 
-    def forward(self, spikePow, spikePow_mask):
+    def forward(self, spikePow, spikePow_mask, labels=None):
         # spikePow (batch_size, input_len, input_channels)
         mask_embeddings = self.mask_tokens(spikePow_mask)
 
@@ -374,36 +407,25 @@ class B2T_Model(BaseModel):
         if self.second_enc is not None:
             hidden_states = self.second_enc(hidden_states)
 
-        if self.phoneme_rec:
-            logits = self.linear_ph(hidden_states)
-        else:
-            logits = self.linear_ch(hidden_states)
+        if labels is not None:
+            return self.t5_model(inputs_embeds=hidden_states, labels=labels)
 
-        return logits
+        return self.t5_model.generate(inputs_embeds=hidden_states, max_new_tokens=150)
 
     def calc_loss(self, batch):
-        logits = self(
-            spikePow=batch["spikePow"],
-            spikePow_mask=batch["spikePow_mask"],
-        )
-
-        batch_size, seq_len, vocab_size = logits.shape
-
         if self.phoneme_rec:
             labels = batch["phonemize_ids"]
         else:
             labels = batch["sent_ids"]
 
-        # pad labels to the same length of logits
-
-        # batch_size, seq_len
-        padded_labels = F.pad(
-            labels, (0, seq_len - labels.shape[-1], 0, 0), mode="constant", value=-100
+        re = self(
+            spikePow=batch["spikePow"],
+            spikePow_mask=batch["spikePow_mask"],
+            labels=labels,
         )
 
-        loss_fct = nn.CrossEntropyLoss()
-
-        loss = loss_fct(logits.view(-1, vocab_size), padded_labels.view(-1))
+        loss = re.loss
+        logits = re.logits
 
         return loss, logits
 
@@ -434,13 +456,19 @@ class B2T_Model(BaseModel):
             self.val_tar += batch["sent"]
 
     def on_validation_epoch_end(self):
-
+        self.val_tar = [
+            s.replace("_", "").replace("+", "").replace("-", "") for s in self.val_tar
+        ]
         if self.phoneme_rec:
             dec = phonetic_decode
         else:
             dec = decode
 
-        pred = [dec(s) for s in self.val_pred]
+        pred = [dec(s).replace("+", "").replace("_", "") for s in self.val_pred]
+
+        wer = torchmetrics.functional.text.word_error_rate(pred, self.val_tar)
+
+        self.log("wer", wer, prog_bar=True)
 
         with open("valid.txt", "w") as txt_file:
             for i in range(len(self.val_pred)):
@@ -458,7 +486,7 @@ class B2T_Model(BaseModel):
             spikePow_mask=batch["spikePow_mask"],
         )
 
-        self.test_pred += res.argmax(dim=-1).cpu().tolist()
+        self.test_pred += res
 
     def on_test_epoch_end(self):
 
@@ -467,7 +495,7 @@ class B2T_Model(BaseModel):
         else:
             dec = decode
 
-        pred = [dec(s) for s in self.test_pred]
+        pred = [dec(s).replace("_", "").replace("+", "") for s in self.test_pred]
 
         with open("test.txt", "w") as txt_file:
             for i in range(len(self.test_pred)):
