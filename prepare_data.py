@@ -19,32 +19,44 @@ def load_file(path, has_labels=True):
     spikePows = []
     sentenceTexts = []
 
+    mean_stds = []
+
     for b_idx in block_ids:
         selected_ids = data["blockIdx"].squeeze() == b_idx
 
         spikePow_block = data["spikePow"][0][selected_ids]
 
-        spikePow_block_lens = [len(a) for a in spikePow_block]
+        spikePows += spikePow_block.tolist()
 
-        spikePow_block_start_indices = np.cumsum(spikePow_block_lens[:-1])
+        spikePow_block = [ scipy.ndimage.gaussian_filter1d(s, 2, axis=0) for s in spikePow_block]
 
         # block normalization
-        spikePow_block = np.vstack(spikePow_block)
+        features = np.vstack(spikePow_block)
 
-        spikePow_block = scipy.stats.zscore(spikePow_block)
+        # spikePow_block = scipy.stats.zscore(spikePow_block)
 
-        spikePow_block = np.split(
-            spikePow_block, indices_or_sections=spikePow_block_start_indices
+        block_mean_std = np.vstack([features.mean(0), features.std(0)])
+        
+        block_mean_std = np.expand_dims(block_mean_std, 0)
+
+        block_mean_std = np.broadcast_to(
+            block_mean_std, (len(spikePow_block), 2, len(features[0]))
         )
 
-        spikePows += spikePow_block
+        # spikePow_block = np.split(
+        #     spikePow_block, indices_or_sections=spikePow_block_start_indices
+        # )
+
+
+        mean_stds += [block_mean_std]
+
 
         if has_labels:
             sentenceText_block = data["sentenceText"][selected_ids]
             sentenceTexts += [clean_text(s) for s in sentenceText_block]
 
     data = None
-    return spikePows, sentenceTexts
+    return spikePows, sentenceTexts, mean_stds
 
 
 def load_dir(dir_path, has_labels=True):
@@ -53,20 +65,22 @@ def load_dir(dir_path, has_labels=True):
 
     spikePows = []
     sentenceTexts = []
+    mean_stds = []
 
     for f in data_file_paths:
-        sp, st = load_file(path=f, has_labels=has_labels)
+        sp, st, ms = load_file(path=f, has_labels=has_labels)
 
         spikePows += sp
+        mean_stds += ms
 
         if has_labels:
             sentenceTexts += st
 
-    return spikePows, sentenceTexts
+    return spikePows, sentenceTexts, mean_stds
 
 
 def prepare_data(input_dir, output_dir, has_labels=True):
-    spikePows, sentenceTexts = load_dir(dir_path=input_dir, has_labels=has_labels)
+    spikePows, sentenceTexts, mean_stds = load_dir(dir_path=input_dir, has_labels=has_labels)
 
     spikePow_lens = [0] + [len(a) for a in spikePows]
 
@@ -77,10 +91,14 @@ def prepare_data(input_dir, output_dir, has_labels=True):
 
     spikePows = np.vstack(spikePows)
 
+    mean_stds = np.vstack(mean_stds)
+
     # save spikePows
     np.save(os.path.join(output_dir, "spikePows.npy"), spikePows)
 
     np.save(os.path.join(output_dir, "spikePow_indices.npy"), spikePow_indices)
+
+    np.save(os.path.join(output_dir, "spikePow_mean_stds.npy"), mean_stds)
 
     if has_labels:
         phonemized = phonemize_text(sentenceTexts)
