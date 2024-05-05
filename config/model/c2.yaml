@@ -14,9 +14,11 @@ encoder:
     # - ["lstm", input_size, num_layers, bidirectional]
     # - ["t5_conv_cross_att", input_dims, n_layer]
 
-    - ["conv", 256, 1024, 7, 2, 256]
-    - ["highway", 1024, 2]
-    - ["conv", 1024, 512, 3, 2, 1]
+    - ["conv", 256, 1024, 5, 1, 256]
+    - ["conv", 1024, 512, 5, 2, 256]
+    - ["highway", 512, 2]
+    - ["conv", 512, 1024, 3, 1, 4]
+    - ["conv", 1024, 512, 3, 2, 4]
     - ["highway", 512, 2]
     - ["mamba", 512, 7, true]
 

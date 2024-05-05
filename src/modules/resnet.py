@@ -52,7 +52,7 @@ class resnet_block(nn.Module):
         else:
             self.residual = nn.MaxPool1d(kernel_size=1, stride=stride)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, input_lens):
         # hidden_states  (batch_size, seq_len, input_dims)
 
         # transpose input for convolution
@@ -71,4 +71,6 @@ class resnet_block(nn.Module):
 
         convoluted = self.act(out + residual_part)
 
-        return convoluted.transpose(1, 2)
+        output_lens = (input_lens - 1) // self.stride + 1
+
+        return convoluted.transpose(1, 2), output_lens

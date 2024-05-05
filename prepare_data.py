@@ -2,6 +2,8 @@ import scipy.io as sio
 import scipy
 import os
 import numpy as np
+from scipy.stats import norm
+from tqdm import tqdm
 
 from src.utils import (
     phonemize_text,
@@ -9,6 +11,103 @@ from src.utils import (
     clean_text,
     tokenize,
 )
+
+
+def fill_nan_1d(arr):
+    mask = np.isnan(arr)
+    idx = np.where(~mask, np.arange(mask.shape[0]), 0)
+    np.maximum.accumulate(idx, out=idx)
+    out = arr[idx]
+    return out
+
+
+def filter_noises_per_channel(spikePow_channel):
+    # spikePow_channel = 1/(spikePow_channel + 1)
+
+    _mean = np.median(spikePow_channel)
+    # _std = np.std(spikePow_channel)
+    _std = np.median(np.abs(spikePow_channel - _mean))
+
+    probs = norm.pdf(spikePow_channel, _mean, _std)
+
+    # thres = np.percentile(probs, 1)
+    # thres = max(thres, 1e-10)
+    # thres = min(thres, 1e-10)
+
+    thres = 1e-7
+    outliers = probs < thres
+
+    # outliers = spikePow_channel > _mean + 4 * _std
+    # outliers[spikePow_channel < _mean - 4 * _std] = True
+
+    temp = np.where(outliers, _mean, spikePow_channel)
+    filtered = np.where(
+        spikePow_channel[outliers] > _mean, temp.max(), spikePow_channel[outliers]
+    )
+    filtered = np.where(filtered < _mean, temp.min(), filtered)
+    spikePow_channel[outliers] = filtered
+
+    # spikePow_channel[outliers] = _mean
+
+    # spikePow_channel[outliers] = np.NaN
+    # if np.isnan(spikePow_channel[0]):
+    #     spikePow_channel[0] = _mean
+    # spikePow_channel = fill_nan_1d(spikePow_channel)
+
+    # high = _mean + 2.5*_std
+    # low = _mean - 2.5*_std
+    # spikePow_channel = np.clip(spikePow_channel, low, high)
+
+    return spikePow_channel
+
+
+def filter_noises(spikePow):
+    for c in range(len(spikePow[0])):
+        spikePow[:, c] = filter_noises_per_channel(spikePow[:, c])
+    return spikePow
+
+
+def fix_text(text):
+
+    text = text.lower().strip()
+
+    replace_list = [
+        [".", " "],
+        ["-", " "],
+        ["?", " "],
+        [",", " "],
+        ["\"", " "],
+        ["in' ", "ing "],
+        ["in'.", "ing."],
+        ["' ", " "], # 8 instances is not enough
+        ["'em", "them"],
+        [" 'll", "'ll"],
+        [" 'd", "'d"],
+        [" '", " "],
+        ["evidence'", "evidence"], # unique case
+        ["!", " "],
+        ["\"", " "],
+        [":", " "],
+        [";", " "],
+        ["stirrin", "stirring"],
+        [" hey've", "they've"],
+        ["their's", "theirs"],
+        ["cccountability", "accountability"],
+        ["anythingt", "anything"],
+        ["pricy", "pricey"],
+        ["cucbers", "cucumbers"],
+        ["premis", "premises"],
+        [" aking ", " making "]
+    ]
+
+    for fro, to in replace_list:
+        text = text.replace(fro, to)
+
+    text = " ".join(text.split())
+
+    cl_text = clean_text(text)
+
+    return cl_text
 
 def load_file(path, has_labels=True):
     data = sio.loadmat(path)
@@ -26,34 +125,50 @@ def load_file(path, has_labels=True):
 
         spikePow_block = data["spikePow"][0][selected_ids]
 
-        spikePows += spikePow_block.tolist()
+        # this should fix all the realy large spikes
+        # spikePow_block = 1/(spikePow_block + 1)
 
-        spikePow_block = [ scipy.ndimage.gaussian_filter1d(s, 2, axis=0) for s in spikePow_block]
+
+        spikePow_block_lens = [len(a) for a in spikePow_block]
+
+        spikePow_block_start_indices = np.cumsum(spikePow_block_lens[:-1])
+
+        # spikePow_block = [ scipy.ndimage.gaussian_filter1d(s, 2, axis=0) for s in spikePow_block]
 
         # block normalization
         features = np.vstack(spikePow_block)
 
+        # temporary fix
+        # now done in dataloader
+        # features = filter_noises(features)
+
         # spikePow_block = scipy.stats.zscore(spikePow_block)
 
-        block_mean_std = np.vstack([features.mean(0), features.std(0)])
-        
+        _mean = np.median(features, axis=0)
+        _std = np.median(np.abs(features - _mean), axis=0)
+        # _mean = features.mean(0)
+        # _mean = features.std(0)
+
+        block_mean_std = np.vstack([_mean, _std])
+
         block_mean_std = np.expand_dims(block_mean_std, 0)
 
         block_mean_std = np.broadcast_to(
             block_mean_std, (len(spikePow_block), 2, len(features[0]))
         )
 
-        # spikePow_block = np.split(
-        #     spikePow_block, indices_or_sections=spikePow_block_start_indices
-        # )
+        spikePow_block = np.split(
+            features, indices_or_sections=spikePow_block_start_indices
+        )
 
+        spikePows += spikePow_block
 
         mean_stds += [block_mean_std]
 
-
         if has_labels:
             sentenceText_block = data["sentenceText"][selected_ids]
-            sentenceTexts += [clean_text(s) for s in sentenceText_block]
+            sentenceTexts += [fix_text(s) for s in sentenceText_block]
+            # sentenceTexts += sentenceText_block.tolist()
 
     data = None
     return spikePows, sentenceTexts, mean_stds
@@ -67,7 +182,7 @@ def load_dir(dir_path, has_labels=True):
     sentenceTexts = []
     mean_stds = []
 
-    for f in data_file_paths:
+    for f in tqdm(data_file_paths):
         sp, st, ms = load_file(path=f, has_labels=has_labels)
 
         spikePows += sp
@@ -80,7 +195,9 @@ def load_dir(dir_path, has_labels=True):
 
 
 def prepare_data(input_dir, output_dir, has_labels=True):
-    spikePows, sentenceTexts, mean_stds = load_dir(dir_path=input_dir, has_labels=has_labels)
+    spikePows, sentenceTexts, mean_stds = load_dir(
+        dir_path=input_dir, has_labels=has_labels
+    )
 
     spikePow_lens = [0] + [len(a) for a in spikePows]
 
@@ -109,6 +226,7 @@ def prepare_data(input_dir, output_dir, has_labels=True):
         np.save(os.path.join(output_dir, "sentenceTexts.npy"), sentenceTexts)
         np.save(os.path.join(output_dir, "phonemizedTexts.npy"), phonemized)
 
+
 def main():
     input_dir = [
         "./dataset/competitionData/train",
@@ -121,11 +239,7 @@ def main():
         "./dataset/test",
     ]
 
-    has_labels = [
-        True,
-        True,
-        False
-    ]
+    has_labels = [True, True, False]
 
     for d in output_dir:
         os.makedirs(d, exist_ok=True)
@@ -133,6 +247,7 @@ def main():
     for inp, out, hl in zip(input_dir, output_dir, has_labels):
         print(inp)
         prepare_data(inp, out, hl)
+
 
 if __name__ == "__main__":
     main()

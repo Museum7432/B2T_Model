@@ -1,4 +1,7 @@
-torch
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
+packaging
 lightning
 numpy
 scipy
@@ -7,10 +10,9 @@ transformers
 wandb
 tensorboard
 einops
-mamba-ssm
 hydra-core
 phonemizer
-packaging
-torchvision
-torchaudio
 local-attention
+mamba-ssm
+flashlight-text
+flashlight-textkenlm

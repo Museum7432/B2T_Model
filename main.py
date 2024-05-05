@@ -8,7 +8,7 @@ from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 import torch
 
-from src.model import B2T_CTC, B2T_Model
+from src.model import B2T_CTC, B2T_Model, joint_Model
 from src.data import B2T_DataModule
 
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
@@ -57,9 +57,10 @@ def main(config: DictConfig):
     if config.get("float32_matmul_precision"):
         torch.set_float32_matmul_precision(config.float32_matmul_precision)
 
-
-
-    model = get_model(config)
+    if config.get("from_ckpt") and config.from_ckpt != 0:
+        model = joint_Model.load_from_checkpoint(config.from_ckpt, strict=False, config=config.model, decoders_conf=None)
+    else:
+        model = joint_Model(config.model)
 
     # load datamodule
     data_module = B2T_DataModule(config.data_module)
@@ -74,6 +75,11 @@ def main(config: DictConfig):
             tags=[config.training_stage]
         )
         loggers.append(wdb)
+
+        artifact = wandb.Artifact(name="configs", type="configs")
+        artifact.add_dir(local_path="./.hydra")
+        wdb.experiment.log_artifact(artifact)
+
 
     tb = TensorBoardLogger(save_dir="./", name="", default_hp_metric=False)
     loggers.append(tb)
@@ -103,13 +109,13 @@ def main(config: DictConfig):
 
     trainer.test(ckpt_path="best", datamodule=data_module)
 
-    if config.get("wandb") and config.wandb:
-        artifact = wandb.Artifact(name="backup", type="configs")
-        artifact.add_file(local_path="./valid.txt")
-        artifact.add_file(local_path="./test.txt")
-        artifact.add_dir(local_path="./.hydra")
+    # if config.get("wandb") and config.wandb:
+    #     artifact = wandb.Artifact(name="backup", type="configs")
+    #     # artifact.add_file(local_path="./valid.txt")
+    #     # artifact.add_file(local_path="./test.txt")
+    #     artifact.add_dir(local_path="./.hydra")
 
-        wdb.experiment.log_artifact(artifact)
+    #     wdb.experiment.log_artifact(artifact)
 
 
 if __name__ == "__main__":

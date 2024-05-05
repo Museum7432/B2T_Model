@@ -111,8 +111,8 @@ class local_attention_block(nn.Module):
             # use_dynamic_pos_bias=True
         )
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, input_lens):
 
         hidden_states = self.model(hidden_states)
 
-        return hidden_states
+        return hidden_states, input_lens

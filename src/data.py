@@ -13,7 +13,33 @@ from .utils import (
     phonetic_tokenize,
     clean_text,
     tokenize,
+    phoneme_vocab,
+    vocab,
 )
+
+correct_pos = np.array(
+    [
+        [192, 193, 208, 216, 160, 165, 178, 185, 62, 51, 43, 35, 94, 87, 79, 78],
+        [194, 195, 209, 217, 162, 167, 180, 184, 60, 53, 41, 33, 95, 86, 77, 76],
+        [196, 197, 211, 218, 164, 170, 177, 189, 63, 54, 47, 44, 93, 84, 75, 74],
+        [198, 199, 210, 219, 166, 174, 173, 187, 58, 55, 48, 40, 92, 85, 73, 72],
+        [200, 201, 213, 220, 168, 176, 183, 186, 59, 45, 46, 38, 91, 82, 71, 70],
+        [202, 203, 212, 221, 172, 175, 182, 191, 61, 49, 42, 36, 90, 83, 69, 68],
+        [204, 205, 214, 223, 161, 169, 181, 188, 56, 52, 39, 34, 89, 81, 67, 66],
+        [206, 207, 215, 222, 163, 171, 179, 190, 57, 50, 37, 32, 88, 80, 65, 64],
+        [129, 144, 150, 158, 224, 232, 239, 255, 125, 126, 112, 103, 31, 28, 11, 8],
+        [128, 142, 152, 145, 226, 233, 242, 241, 123, 124, 110, 102, 29, 26, 9, 5],
+        [130, 135, 148, 149, 225, 234, 244, 243, 121, 122, 109, 101, 27, 19, 18, 4],
+        [131, 138, 141, 151, 227, 235, 246, 245, 119, 120, 108, 100, 25, 15, 12, 6],
+        [134, 140, 143, 153, 228, 236, 248, 247, 117, 118, 107, 99, 23, 13, 10, 3],
+        [132, 146, 147, 155, 229, 237, 250, 249, 115, 116, 106, 97, 21, 20, 7, 2],
+        [133, 137, 154, 157, 230, 238, 252, 251, 113, 114, 105, 98, 17, 24, 14, 0],
+        [136, 139, 156, 159, 231, 240, 254, 253, 127, 111, 104, 96, 30, 22, 16, 1],
+    ]
+)
+correct_pos = np.array(
+    [correct_pos[:8, :8], correct_pos[8:, 8:], correct_pos[:8, 8:], correct_pos[8:, :8]]
+).flatten()
 
 
 # https://stackoverflow.com/questions/3589214/generate-random-numbers-summing-to-a-predefined-value
@@ -190,6 +216,7 @@ class B2T_Dataset(Dataset):
         spikePows = np.load(self.spikePows_path, mmap_mode="r")
         _start, _end = self.spikePow_indices[idx]
 
+        # spikePow = spikePows[_start:_end][:, correct_pos]
         spikePow = spikePows[_start:_end]
 
         # if self.add_noises:
@@ -197,29 +224,43 @@ class B2T_Dataset(Dataset):
         # new_len = len(spikePows) - 10
         # spikePow = signal.resample(spikePow, new_len)
 
-        # gaussian blur
-        sig = 2
-        if self.add_noises:
-            sig = np.random.normal(loc=2, scale=0.25)
-
-        spikePow = scipy.ndimage.gaussian_filter1d(spikePow, sig, axis=0)
-
         _mean, _std = self.spikePow_mean_stds[idx]
 
+        noise = 0
+
         if self.add_noises:
-            noise1 = np.random.uniform(low=0.95, high=1.05, size=256).astype(
-                spikePow.dtype
-            )
-            noise2 = np.random.uniform(low=0.95, high=1.05, size=256).astype(
-                spikePow.dtype
-            )
+            # noise1 = np.random.uniform(low=0.95, high=1.05, size=256).astype(
+            #     spikePow.dtype
+            # )
+            # noise2 = np.random.uniform(low=0.95, high=1.05, size=256).astype(
+            #     spikePow.dtype
+            # )
             # _mean = _mean * noise1
-            _std = _std * noise2
+            # _std = _std * noise2
+            # spikePow = spikePow * noise1
+
+            noise = np.random.normal(loc=0.0, scale=0.05, size=256).astype(
+                spikePow.dtype
+            )
 
         # block normalization
-        spikePow = (spikePow - _mean) / _std
+        spikePow = (spikePow - _mean) / _std + noise
+
+        # filter noises
+        # assume each input channel follows a gaussian distribution
+        # with std=1 after block normalization
+
+        high = 4
+        low = -4
+        spikePow = np.clip(spikePow, low, high)
 
         spikePow_mask = np.ones(len(spikePow), dtype=int)
+
+        # gaussian blur
+        sig = 0.8
+        if self.add_noises:
+            sig = np.random.uniform(low=sig, high=sig + 0.3)
+        spikePow = scipy.ndimage.gaussian_filter1d(spikePow, sig, axis=0, radius=10)
 
         if self.has_labels:
             sentenceText = self.sentenceTexts[idx]
@@ -228,18 +269,35 @@ class B2T_Dataset(Dataset):
             sentenceText = None
             phonemizedText = None
 
+        # if self.add_noises and np.random.rand() < 0.1:
+        #     spikePow = np.flip(spikePow, axis=0)
+
+        #     if self.has_labels:
+        #         sentenceText = sentenceText[::-1]
+
+        #         # t = sentenceText.split()[::-1]
+        #         # sentenceText = " ".join(t)
+
+        #         # phonemizedText = phonemizedText[::-1]
+        #         t = phonemizedText.replace(" ", " | ")
+        #         t = t.replace("-", " - ")
+        #         t = t.replace("+", " + ")
+        #         t = t.split()[::-1]
+        #         phonemizedText = "".join(t).replace("|", " ")
+
         return spikePow, spikePow_mask, sentenceText, phonemizedText
 
     def _get(self, idx):
         seq_ids = [idx]
 
-        if self.add_noises and self.has_labels:
-            add_len = np.random.randint(4) + 1
-            seq_ids = np.random.choice(len(self.spikePow_indices), size=add_len,replace=False)
-            if idx not in seq_ids:
-                seq_ids[0] = idx
-            np.random.shuffle(seq_ids)
-
+        # if self.add_noises and self.has_labels:
+        #     add_len = np.random.randint(4) + 1
+        #     seq_ids = np.random.choice(
+        #         len(self.spikePow_indices), size=add_len, replace=False
+        #     )
+        #     if idx not in seq_ids:
+        #         seq_ids[0] = idx
+        #     np.random.shuffle(seq_ids)
 
         items = [self._get_one(i) for i in seq_ids]
 
@@ -253,14 +311,14 @@ class B2T_Dataset(Dataset):
             spikePow_mask.append(spm)
             sentenceText.append(st)
             phonemizedText.append(pt)
-        
 
         spikePow = np.vstack(spikePow)
         spikePow_mask = np.concatenate(spikePow_mask)
 
-        # assume there is a silent before and after the text is spoken
-        sentenceText = " ".join(sentenceText)
-        phonemizedText = " ".join(phonemizedText)
+        if self.has_labels:
+            # assume there is a silent before and after the text is spoken
+            sentenceText = " ".join(sentenceText)
+            phonemizedText = " ".join(phonemizedText)
 
         return spikePow, spikePow_mask, sentenceText, phonemizedText
 
@@ -269,9 +327,9 @@ class B2T_Dataset(Dataset):
         spikePow, spikePow_mask, sentenceText, phonemizedText = self._get(idx)
 
         # mask part of spikePow
-        if self.add_noises and np.random.rand() < 0.75:
+        if self.add_noises and np.random.rand() < 0.5:
             seq_len, channel_dim = spikePow.shape
-            mask_length = int(seq_len * (np.random.rand() / 6))
+            mask_length = np.random.randint(4) + 4
 
             _start = np.random.randint(seq_len - mask_length)
             _end = _start + mask_length
@@ -285,27 +343,36 @@ class B2T_Dataset(Dataset):
             _start = np.random.randint(5)
             spikePow = spikePow[_start:]
             spikePow_mask = spikePow_mask[_start:]
-            
-        spikePow = np.pad(
-            spikePow,
-            ((4, 0), (0, 0)),
-            "constant",
-            constant_values=0,
-        )
-        spikePow_mask = np.pad(spikePow_mask, (4, 0), constant_values=3)
 
+        if self.add_noises and np.random.rand() < 0.1:
+            # blank out quater of the input channels randomly
+            # _start = np.random.randint(3) * 64
+            # _end = _start + 64
+            # spikePow[:, _start:_end] = 0
+
+            
+            selected_channels = np.random.rand(256) < 0.2
+            spikePow[:, selected_channels] = 0
+        
+        
         re = {
             "spikePow": spikePow,
             "spikePow_mask": spikePow_mask,
+            "spikePow_lens": len(spikePow),
         }
 
         if not self.has_labels:
             return re
 
+        sentenceText = sentenceText.replace(" ", "|")
+        phonemizedText = phonemizedText.replace(" ", "|")
+
         tokenized = tokenize(sentenceText)
 
-        # tokenized = [2] + tokenized + [2, 1]
-        tokenized = tokenized + [1]
+        eos_id = len(vocab) - 1
+
+        # tokenized = [1] + tokenized + [1, eos_id]
+        tokenized = tokenized + [eos_id]
 
         re["sent"] = sentenceText
 
@@ -317,7 +384,12 @@ class B2T_Dataset(Dataset):
         # ph = [2] + ph + [2, 1]
         # 0: pad
         # 1: eos
-        ph = ph + [1]
+        # ph = ph + [1]
+
+        ph_eos_id = len(phoneme_vocab) - 1
+
+        # ph = [1] + ph + [1, ph_eos_id]
+        ph = ph + [ph_eos_id]
 
         re["phonemized"] = phonemizedText
         re["phonemize_ids"] = ph
@@ -331,6 +403,7 @@ def collate_fn_factory(add_noises=False):
     batch_fields = [
         "spikePow",
         "spikePow_mask",
+        "spikePow_lens",
         "sent_ids",
         "sent_ids_len",
         "phonemize_ids",
@@ -344,6 +417,7 @@ def collate_fn_factory(add_noises=False):
     tensor_fields = [
         "spikePow",
         "spikePow_mask",
+        "spikePow_lens",
         "sent_ids",
         "sent_ids_len",
         "phonemize_ids",
@@ -387,26 +461,6 @@ def collate_fn_factory(add_noises=False):
 
         for i in range(len(batch["spikePow"])):
             additional = target_length - len(batch["spikePow"][i])
-
-            # randomly split spikePow with paddings, did not work as expected
-            # it is better to just mask part of the input
-
-            # if add_noises:
-            #     spikePow, spikePow_mask = plit_spikePow(
-            #         batch["spikePow"][i], batch["spikePow_mask"][i], additional
-            #     )
-            #     batch["spikePow"][i] = spikePow
-            #     batch["spikePow_mask"][i] = spikePow_mask
-
-            #     continue
-
-            # if not add_noises:
-            #     _start = additional // 2
-            # else:
-            #     _start = np.random.randint(additional + 1)
-            # _start = additional // 2
-
-            # _end = additional - _start
 
             batch["spikePow"][i] = np.pad(
                 batch["spikePow"][i],

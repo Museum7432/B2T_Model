@@ -11,32 +11,40 @@ encoder:
     # - ["attention", input_dims, n_layer, local_attn_window_size, positional_embeding]
     # - ["highway", input_dim, num_layers]
     # - ["conv", input_dims, output_dims, kernel_size, stride, groups]
+    # - ["lstm", input_size, num_layers, bidirectional]
+    # - ["t5_conv_cross_att", input_dims, n_layer]
 
-
-    - ["conv", 256, 1024, 7, 2, 256]
-    - ["highway", 1024, 2]
+    - ["conv", 256, 1024, 15, 1, 4]
     - ["conv", 1024, 512, 3, 2, 1]
-    - ["highway", 768, 2]
-    - ["mamba", 768, 6, true]
+    - ["t5_conv_cross_att", 512, 5]
+    # - ["highway", 512, 2]
+    # - ["mamba", 512, 3, true]
 
-decoder:
-  phoneme_vocab_size: 47
-  character_vocab_size: 30
+decoders_conf:
+  # train multiple decoders at once
+  # name, type, loss weights
+  - ["ctc_al", "ctc_alphabet", 0.5]
+  - ["ctc_ph", "ctc_phonetic", 0.5]
+  - ["dec_al", "decoder_alphabet", 0.3]
+  # - ["dec_ph", "decoder_phonetic", 0.5]
 
-  # not used by the ctc decoder
-  # layers:
-  #   - ["mamba", 512, 2, true]
-  #   - ["resnet", 512, 512, 2]
-  #   - ["mamba", 512, 4, true]
-  
-  t5_num_encoder_layers: 0
-  t5_num_decoder_layers: 6
+decoders_layers:
+  ctc_al:
+    - ["mamba", 512, 2, true]
+  ctc_ph:
+    - ["mamba", 512, 1, true]
+  dec_al:
+    - ["mamba", 512, 1, true]
+    - ["t5_dec", 512, 4]
+  dec_ph:
+    - ["mamba", 512, 2, true]
+    - ["t5_dec", 512, 4, 8]
 
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
-  peak_lr: 2e-4
-  last_lr: 5e-6
+  peak_lr: 3e-4
+  last_lr: 1e-6
   beta_1: 0.9
   beta_2: 0.95
   weight_decay: 0.1

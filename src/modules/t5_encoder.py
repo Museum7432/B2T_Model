@@ -20,7 +20,7 @@ class t5_encoder(nn.Module):
         base_config.num_layers = n_layer
         base_config.vocab_size = 1
         self.model = T5EncoderModel(base_config)
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, input_lens):
         hidden_states = self.model(inputs_embeds=hidden_states).last_hidden_state
 
-        return hidden_states
+        return hidden_states, input_lens

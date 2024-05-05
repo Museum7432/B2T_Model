@@ -7,13 +7,13 @@ import itertools
 # require "festival" to be installed
 
 # el, em, en, pau not found in trainning dataset
-# _: blank token
-# ' ': silent token
-# _ should be at indice 1 for consistency with the t5 model
-# '+': pad token (not used)
-phoneme_vocab = "+,_, ,aa,ae,ah,ao,aw,ax,ay,eh,el,em,en,er,ey,ih,iy,ow,oy,uh,uw,b,ch,d,dh,f,g,hh,jh,k,l,m,n,ng,p,r,s,sh,t,th,v,w,y,z,zh,pau".split(
+# '-': blank token/pad token
+# '|': silent token
+# '_': eos token (not used for ctc)
+phoneme_vocab = "-,|,aa,ae,ah,ao,aw,ax,ay,eh,el,em,en,er,ey,ih,iy,ow,oy,uh,uw,b,ch,d,dh,f,g,hh,jh,k,l,m,n,ng,p,r,s,sh,t,th,v,w,y,z,zh,pau,_".split(
     ","
 )
+ctc_phoneme_vocab = phoneme_vocab[:-1]
 
 whitelist_char = "nuclear oktsdyifwhbvxpm'gqjz"
 
@@ -45,32 +45,34 @@ def flatten(xss):
 def phonetic_tokenize(text):
     # input:
     # nuclear rockets
-    # n-uw+k-l-iy+er r-aa+k-ax-t-s
+    # n-uw+k-l-iy+er|r-aa+k-ax-t-s
 
-    text = text.replace(' ', ', ,')
+    text = text.replace('|', ',|,')
 
     text = text.replace('-', ',')
     text = text.replace('+', ',')
 
     tokens = text.split(',')
-
     return [phoneme_vocab.index(c) for c in tokens]
 
 
 def phonetic_decode(ids, remove_consecutive=False):
     if remove_consecutive:
         ids = [i for i, _ in itertools.groupby(ids)]
+
     return "".join([phoneme_vocab[i] for i in ids])
 
 
 # for text generation
-vocab = "+_ nuclearoktsdyifwhbvxpm'gqjz"
+vocab = [c for c in "-|etaonihsrdlumwcfgypbvk'xjqz_"]
+
+ctc_vocab = vocab[:-1]
 
 def tokenize(text):
     return [vocab.index(c) for c in text]
 
-
 def decode(ids, remove_consecutive=False):
     if remove_consecutive:
         ids = [i for i, _ in itertools.groupby(ids)]
+
     return "".join([vocab[i] for i in ids])
