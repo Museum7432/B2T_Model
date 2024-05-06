@@ -8,36 +8,12 @@ from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 import torch
 
-from src.model import B2T_CTC, B2T_Model, joint_Model
+from src.model import joint_Model
 from src.data import B2T_DataModule
 
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 
 import wandb
-
-
-def get_model(config):
-    print(f"Training {config.training_stage}")
-
-    if "ctc" in config.training_stage:
-        Model = B2T_CTC
-    else:
-        Model = B2T_Model
-    
-    if "phonetic" in config.training_stage:
-        phoneme_rec = True
-    else:
-        phoneme_rec = False
-    
-    if config.get("from_ckpt") and config.from_ckpt != 0:
-        print(f"load parameters from {config.from_ckpt}")
-        model = Model.load_from_checkpoint(
-            config.from_ckpt, config=config.model, phoneme_rec=phoneme_rec, strict=False
-        )
-    else:
-        model = Model(config.model, phoneme_rec=phoneme_rec)
-    
-    return model
 
 
 @hydra.main(version_base="1.3", config_path="config", config_name="config")
@@ -71,8 +47,7 @@ def main(config: DictConfig):
     if config.get("wandb") and config.wandb:
         wdb = WandbLogger(
             project=config.experiment_name,
-            settings=wandb.Settings(code_dir=original_cwd),
-            tags=[config.training_stage]
+            settings=wandb.Settings(code_dir=original_cwd)
         )
         loggers.append(wdb)
 

@@ -315,24 +315,32 @@ class decoder(L.LightningModule):
     def forward(self, hidden_states, input_lens, labels=None):
         hidden_states, output_lens = self.layers(hidden_states, input_lens)
 
-        # TODO: create attention mask from output_lens
+        batch_size, seq_len, hidden_size = hidden_states.shape
+
+        attention_mask = torch.arange(
+            seq_len, device=self.device
+        ) < output_lens.unsqueeze(1)
 
         if labels is not None:
-            return self.t5_model(inputs_embeds=hidden_states, labels=labels)
+            return self.t5_model(
+                inputs_embeds=hidden_states,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
 
         logits = self.t5_model.generate(
             inputs_embeds=hidden_states,
+            attention_mask=attention_mask,
             max_new_tokens=150,
             output_logits=True,
             return_dict_in_generate=True,
         ).logits
 
-
         batch_size, vocab_size = logits[0].shape
 
         logits = torch.vstack(logits)
-        
-        logits = logits.reshape(-1,batch_size,vocab_size).transpose(0,1)
+
+        logits = logits.reshape(-1, batch_size, vocab_size).transpose(0, 1)
 
         return logits, None
 
@@ -342,9 +350,7 @@ class decoder(L.LightningModule):
         else:
             labels = batch["sent_ids"]
 
-        out = self(
-            hidden_states=hidden_states, input_lens=input_lens, labels=labels
-        )
+        out = self(hidden_states=hidden_states, input_lens=input_lens, labels=labels)
         loss = out.loss
         logits = out.logits
 
@@ -352,7 +358,7 @@ class decoder(L.LightningModule):
 
         return loss, logits, None
 
-    def batch_decode(self, ids,output_lens=None, raw_ouput=False):
+    def batch_decode(self, ids, output_lens=None, raw_ouput=False):
 
         if self.phoneme_rec:
             dec = phonetic_decode
@@ -367,356 +373,6 @@ class decoder(L.LightningModule):
         texts = [s.replace("|", " ").replace("-", "").replace("_", "") for s in texts]
 
         return texts
-
-
-class B2T_CTC(BaseModel):
-    def __init__(self, config: DictConfig, phoneme_rec=False):
-        # phoneme_rec: recognize phoneme or character
-        super(B2T_CTC, self).__init__()
-        self.save_hyperparameters()
-
-        self.phoneme_rec = phoneme_rec
-
-        self.config = config
-
-        self.encoder = modules_stack(config.encoder.layers)
-
-        if phoneme_rec:
-            # remove the eos token
-            self.vocab_size = len(phoneme_vocab) - 1
-
-            self.linear_ph = nn.Linear(self.encoder.output_dims, self.vocab_size)
-        else:
-            self.vocab_size = len(vocab) - 1
-
-            self.linear_ch = nn.Linear(self.encoder.output_dims, self.vocab_size)
-        # 0: padding
-        # 1: input
-        # 2: masked
-        # 3: eos token
-        # since mamba has not support masking out padded inputs
-        self.mask_tokens = nn.Embedding(
-            num_embeddings=4, embedding_dim=256, padding_idx=1
-        )
-
-    def forward(self, spikePow, spikePow_mask, spikePow_lens):
-        # _input (batch_size, input_len, input_channels)
-
-        mask_embeddings = self.mask_tokens(spikePow_mask)
-
-        # assume spikePow is padded and masked with 0
-        spikePow = spikePow + mask_embeddings
-
-        hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
-
-        if self.phoneme_rec:
-            res = self.linear_ph(hidden_states)
-        else:
-            res = self.linear_ch(hidden_states)
-
-        return res.log_softmax(-1), output_lens
-
-    def calc_loss(self, batch):
-        res, output_lens = self(
-            spikePow=batch["spikePow"],
-            spikePow_mask=batch["spikePow_mask"],
-            spikePow_lens=batch["spikePow_lens"],
-        )
-
-        if self.phoneme_rec:
-            loss = F.ctc_loss(
-                res.transpose(0, 1),
-                batch["phonemize_ids"],
-                output_lens,
-                batch["phonemize_ids_len"] - 1,  # remove the eos token
-                zero_infinity=True,
-            )
-        else:
-            loss = F.ctc_loss(
-                res.transpose(0, 1),
-                batch["sent_ids"],
-                output_lens,
-                batch["sent_ids_len"] - 1,  # remove the eos token
-                zero_infinity=True,
-            )
-
-        return loss, res, output_lens
-
-    def training_step(self, batch):
-        loss, res, output_lens = self.calc_loss(batch)
-
-        self.log("train_loss", loss.detach(), prog_bar=True)
-
-        return loss
-
-    def on_validation_epoch_start(self):
-        self.val_pred = []
-        self.val_tar = []
-
-    def validation_step(self, batch):
-
-        loss, res, output_lens = self.calc_loss(batch)
-
-        self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
-
-        preds = res.argmax(dim=-1).cpu().tolist()
-
-        for idx, s in enumerate(preds):
-            preds[idx] = s[: output_lens[idx] - 1]
-
-        self.val_pred += preds
-
-        if self.phoneme_rec:
-            self.val_tar += batch["phonemized"]
-        else:
-            self.val_tar += batch["sent"]
-
-    def on_validation_epoch_end(self):
-
-        self.val_tar = [
-            s.replace("|", " ").replace("_", "").replace("+", "").replace("-", "")
-            for s in self.val_tar
-        ]
-
-        if self.phoneme_rec:
-            dec = phonetic_decode
-        else:
-            dec = decode
-
-        raw_pred = [dec(s) for s in self.val_pred]
-
-        pred = [dec(s, True).replace("|", " ").replace("-", "") for s in self.val_pred]
-
-        wer = torchmetrics.functional.text.word_error_rate(pred, self.val_tar)
-
-        self.log("wer", wer, prog_bar=True)
-
-        with open("valid.txt", "w") as txt_file:
-            for i in range(len(self.val_pred)):
-                txt_file.write(f"{raw_pred[i]}\n{pred[i]}\n{self.val_tar[i]}\n\n")
-        self.val_pred = []
-        self.val_tar = []
-
-    def on_test_epoch_start(self):
-        self.test_pred = []
-
-    def test_step(self, batch):
-        res, output_lens = self(
-            spikePow=batch["spikePow"],
-            spikePow_mask=batch["spikePow_mask"],
-            spikePow_lens=batch["spikePow_lens"],
-        )
-        preds = res.argmax(dim=-1).cpu().tolist()
-        for idx, s in enumerate(preds):
-            preds[idx] = s[: output_lens[idx] - 1]
-
-        self.test_pred += preds
-
-    def on_test_epoch_end(self):
-
-        if self.phoneme_rec:
-            dec = phonetic_decode
-        else:
-            dec = decode
-
-        raw_pred = [dec(s) for s in self.test_pred]
-        pred = [dec(s, True) for s in self.test_pred]
-
-        pred = [s.replace("-", "").replace("|", " ") for s in pred]
-
-        with open("test.txt", "w") as txt_file:
-            for i in range(len(self.test_pred)):
-                txt_file.write(f"{pred[i]}\n")
-
-        with open("test_raw.txt", "w") as txt_file:
-            for i in range(len(self.test_pred)):
-                txt_file.write(f"{raw_pred[i]}\n")
-        self.test_pred = []
-
-
-# from transformers.models.t5.configuration_t5 import T5Config
-# from transformers.models.t5.modeling_t5 import (
-#     T5Stack,
-#     T5ForConditionalGeneration,
-#     T5PreTrainedModel,
-# )
-
-
-# def get_t5_config(input_dims, num_layers, num_decoder_layers, vocab_size, eos_token_id):
-#     base_config = T5Config.from_pretrained("google-t5/t5-base")
-#     base_config.d_model = input_dims
-#     base_config.num_layers = num_layers
-#     base_config.num_decoder_layers = num_decoder_layers
-#     base_config.vocab_size = vocab_size
-
-#     base_config.pad_token_id = pad_token_id
-
-#     base_config.decoder_start_token_id = 0
-
-#     base_config.pad_token_id = 0
-
-#     base_config.eos_token_id = eos_token_id
-
-#     return base_config
-
-
-class B2T_Model(BaseModel):
-    def __init__(self, config: DictConfig, phoneme_rec=False):
-        # phoneme_rec: recognize phoneme or character
-        super(B2T_Model, self).__init__()
-        self.save_hyperparameters()
-
-        self.phoneme_rec = phoneme_rec
-
-        self.config = config
-
-        self.encoder = modules_stack(config.encoder.layers)
-
-        output_dims = self.encoder.output_dims
-
-        if config.decoder.get("layers"):
-            self.second_enc = modules_stack(config.decoder.layers)
-
-            output_dims = self.second_enc.output_dims
-        else:
-            self.second_enc = None
-
-        if phoneme_rec:
-            vocab_size = len(phoneme_vocab)
-        else:
-            vocab_size = len(vocab)
-
-        eos_token_id = vocab_size - 1
-
-        t5_config = get_t5_config(
-            input_dims=output_dims,
-            num_layers=config.decoder.t5_num_encoder_layers,
-            num_decoder_layers=config.decoder.t5_num_decoder_layers,
-            vocab_size=vocab_size,
-            eos_token_id=eos_token_id,
-        )
-
-        self.t5_model = T5ForConditionalGeneration(t5_config)
-
-        # 0: padding
-        # 1: input
-        # 2: masked
-        # 3: eos token
-        # since mamba has not support masking out padded inputs
-        self.mask_tokens = nn.Embedding(
-            num_embeddings=4, embedding_dim=256, padding_idx=1
-        )
-
-    def forward(self, spikePow, spikePow_mask, spikePow_lens, labels=None):
-        # spikePow (batch_size, input_len, input_channels)
-        mask_embeddings = self.mask_tokens(spikePow_mask)
-
-        # assume spikePow is padded and masked with 0
-        spikePow = spikePow + mask_embeddings
-
-        hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
-
-        if self.second_enc is not None:
-            hidden_states, output_lens = self.second_enc(hidden_states, output_lens)
-
-        if labels is not None:
-            return self.t5_model(inputs_embeds=hidden_states, labels=labels)
-
-        # logits = self.t5_model.generate(inputs_embeds=hidden_states, max_new_tokens=150, output_scores=True,return_dict_in_generate=True)
-
-        return self.t5_model.generate(inputs_embeds=hidden_states, max_new_tokens=150)
-
-    def calc_loss(self, batch):
-        if self.phoneme_rec:
-            labels = batch["phonemize_ids"]
-        else:
-            labels = batch["sent_ids"]
-
-        re = self(
-            spikePow=batch["spikePow"],
-            spikePow_mask=batch["spikePow_mask"],
-            spikePow_lens=batch["spikePow_lens"],
-            labels=labels,
-        )
-
-        loss = re.loss
-        logits = re.logits
-
-        return loss, logits
-
-    def training_step(self, batch):
-        # TODO: mask part of the input
-
-        loss, logits = self.calc_loss(batch)
-
-        self.log("train_loss", loss.detach(), prog_bar=True)
-
-        return loss
-
-    def on_validation_epoch_start(self):
-        self.val_pred = []
-        self.val_tar = []
-
-    def validation_step(self, batch):
-
-        loss, logits = self.calc_loss(batch)
-
-        self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
-
-        self.val_pred += logits.argmax(dim=-1).cpu().tolist()
-
-        if self.phoneme_rec:
-            self.val_tar += batch["phonemized"]
-        else:
-            self.val_tar += batch["sent"]
-
-    def on_validation_epoch_end(self):
-        self.val_tar = [
-            s.replace("_", "").replace("+", "").replace("-", "") for s in self.val_tar
-        ]
-        if self.phoneme_rec:
-            dec = phonetic_decode
-        else:
-            dec = decode
-
-        pred = [dec(s).replace("+", "").replace("_", "") for s in self.val_pred]
-
-        wer = torchmetrics.functional.text.word_error_rate(pred, self.val_tar)
-
-        self.log("wer", wer, prog_bar=True)
-
-        with open("valid.txt", "w") as txt_file:
-            for i in range(len(self.val_pred)):
-                txt_file.write(f"{pred[i]}\n{self.val_tar[i]}\n\n")
-
-        self.val_pred = []
-        self.val_tar = []
-
-    def on_test_epoch_start(self):
-        self.test_pred = []
-
-    def test_step(self, batch):
-        res = self(
-            spikePow=batch["spikePow"],
-            spikePow_mask=batch["spikePow_mask"],
-            spikePow_lens=batch["spikePow_lens"],
-        )
-
-        self.test_pred += res
-
-    def on_test_epoch_end(self):
-
-        if self.phoneme_rec:
-            dec = phonetic_decode
-        else:
-            dec = decode
-
-        pred = [dec(s).replace("_", "").replace("+", "") for s in self.test_pred]
-
-        with open("test.txt", "w") as txt_file:
-            for i in range(len(self.test_pred)):
-                txt_file.write(f"{pred[i]}\n")
-        self.test_pred = []
 
 
 def get_decoder(decoder_type, layers_config):

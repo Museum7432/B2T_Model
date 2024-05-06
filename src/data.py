@@ -346,15 +346,13 @@ class B2T_Dataset(Dataset):
 
         if self.add_noises and np.random.rand() < 0.1:
             # blank out quater of the input channels randomly
-            # _start = np.random.randint(3) * 64
-            # _end = _start + 64
-            # spikePow[:, _start:_end] = 0
+            _start = np.random.randint(3) * 64
+            _end = _start + 64
+            spikePow[:, _start:_end] = 0
 
-            
-            selected_channels = np.random.rand(256) < 0.2
-            spikePow[:, selected_channels] = 0
-        
-        
+            # selected_channels = np.random.rand(256) < 0.2
+            # spikePow[:, selected_channels] = 0
+
         re = {
             "spikePow": spikePow,
             "spikePow_mask": spikePow_mask,
@@ -454,8 +452,8 @@ def collate_fn_factory(add_noises=False):
                 batch[f] = _pad(batch[f], constant_values=v)
 
         # pad spikePow and spikePow_mask
-        # spikePow should always be padded
-        target_length = max([len(i) for i in batch["spikePow"]]) + 4
+        target_length = max([len(i) for i in batch["spikePow"]])
+        
         if add_noises:
             target_length += np.random.randint(10)
 
