@@ -26,6 +26,7 @@ from .modules.resnet import resnet_block
 from .modules.pooling import consecutive_pooling
 from .modules.local_attention import local_attention_block
 from .modules.t5_encoder import t5_encoder
+import itertools
 
 
 class modules_stack(L.LightningModule):
@@ -260,6 +261,83 @@ class CTC_decoder(L.LightningModule):
 
         return texts
 
+    def get_target_text(self, batch):
+
+        if self.phoneme_rec:
+            label = batch["phonemized"]
+        else:
+            label = batch["sent"]
+
+        label = [s.replace("|", " ").replace("-", "").replace("+", "") for s in label]
+
+        return label
+
+
+# class whitespace_detection(L.LightningModule):
+#     def __init__(self, layers_config):
+#         super(whitespace_detection, self).__init__()
+#         self.layers_config = layers_config
+
+#         self.layers = modules_stack(layers_config)
+
+#         self.vocab_size = 3
+
+#         self.vocab = ["-", "|", "_"]
+
+#         self.linear = nn.Linear(self.layers.output_dims, self.vocab_size)
+
+#     def forward(self, hidden_states, input_lens):
+
+#         hidden_states, output_lens = self.layers(hidden_states, input_lens)
+
+#         hidden_states = self.linear(hidden_states)
+
+#         return hidden_states.log_softmax(-1), output_lens
+
+#     def calc_loss(self, hidden_states, input_lens, batch):
+#         logits, output_lens = self(hidden_states=hidden_states, input_lens=input_lens)
+
+#         labels = batch["WS_ids"]
+#         label_lens = batch["WS_ids_lens"]
+
+#         loss = F.ctc_loss(
+#             logits.transpose(0, 1),
+#             labels,
+#             output_lens,
+#             label_lens,
+#             zero_infinity=True,
+#         )
+
+#         return loss, logits, output_lens
+
+#     def batch_decode(self, ids, output_lens=None, raw_ouput=False):
+
+#         if output_lens is not None and not raw_ouput:
+#             temp = []
+#             for idx, s in enumerate(ids):
+#                 temp.append(s[: output_lens[idx]])
+#             ids = temp
+
+#         if not raw_ouput:
+#             ids = [[i for i, _ in itertools.groupby(s)] for s in ids]
+
+#         texts = ["".join([self.vocab[i] for i in s]) for s in ids]
+
+#         if raw_ouput:
+#             return texts
+
+#         texts = [s.replace("-", "").replace("_", "w").replace("|", " ") for s in texts]
+
+#         return texts
+
+#     def get_target_text(self, batch):
+
+#         label = batch["WS"]
+
+#         label = [s.replace("|", " ") for s in label]
+
+#         return label
+
 
 from transformers.models.t5.configuration_t5 import T5Config
 from transformers.models.t5.modeling_t5 import (
@@ -374,6 +452,17 @@ class decoder(L.LightningModule):
 
         return texts
 
+    def get_target_text(self, batch):
+
+        if self.phoneme_rec:
+            label = batch["phonemized"]
+        else:
+            label = batch["sent"]
+
+        label = [s.replace("|", " ").replace("-", "").replace("+", "") for s in label]
+
+        return label
+
 
 def get_decoder(decoder_type, layers_config):
     if "phonetic" in decoder_type:
@@ -447,7 +536,8 @@ class joint_Model(BaseModel):
 
         mask_embeddings = self.mask_tokens(spikePow_mask)
 
-        # assume spikePow is padded and masked with 0
+        spikePow[spikePow_mask != 1, :] = 0
+
         spikePow = spikePow + mask_embeddings
 
         hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
@@ -529,13 +619,7 @@ class joint_Model(BaseModel):
                 ids, output_lens=ol, raw_ouput=True
             )
 
-            target = (
-                batch["phonemized"] if self.decoders[k].phoneme_rec else batch["sent"]
-            )
-
-            target = [
-                s.replace("|", " ").replace("-", "").replace("+", "") for s in target
-            ]
+            target = self.decoders[k].get_target_text(batch)
 
             with open(f"valid_{k}.txt", "a") as txt_file:
                 for i in range(len(text)):

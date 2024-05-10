@@ -2,9 +2,9 @@
 
 input_dims: 256
 
-max_epochs: 2
-word_level: true
-val_check_interval: 0.1
+max_epochs: 10
+word_level: false
+val_check_interval: 0.5
 
 encoder:
   layers:
@@ -29,8 +29,8 @@ decoders_conf:
   # name, type, loss weights
   - ["ctc_al", "ctc_alphabet", 0.5]
   - ["ctc_ph", "ctc_phonetic", 0.5]
-  # - ["dec_al", "decoder_alphabet", 0.3]
-  # - ["dec_ph", "decoder_phonetic", 0.3]
+  # - ["dec_al", "decoder_alphabet", 0.25]
+  # - ["dec_ph", "decoder_phonetic", 0.25]
 
 decoders_layers:
   ctc_al:
@@ -47,7 +47,7 @@ decoders_layers:
 
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
-  peak_lr: 3e-4
+  peak_lr: 2e-4
   last_lr: 1e-6
   beta_1: 0.9
   beta_2: 0.95

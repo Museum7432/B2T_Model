@@ -37,6 +37,15 @@ def main(config: DictConfig):
         model = joint_Model.load_from_checkpoint(config.from_ckpt, strict=False, config=config.model, decoders_conf=None)
     else:
         model = joint_Model(config.model)
+    
+    if config.model.get("max_epochs"):
+        config.trainer.max_epochs=config.model.max_epochs
+
+    if config.model.get("val_check_interval"):
+        config.trainer.val_check_interval=config.model.val_check_interval
+    
+    if config.model.get("word_level"):
+        config.data_module.word_level=config.model.word_level
 
     # load datamodule
     data_module = B2T_DataModule(config.data_module)
