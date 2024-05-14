@@ -29,7 +29,8 @@ class conv_block(nn.Module):
         )
 
         # self.bn = nn.BatchNorm1d(output_dims)
-        self.gn = nn.GroupNorm(groups, output_dims)
+        # self.gn = nn.GroupNorm(groups, output_dims)
+
         # self.gn = nn.GroupNorm(output_dims, output_dims)
 
         # self.act = nn.ReLU()

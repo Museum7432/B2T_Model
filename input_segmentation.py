@@ -6,12 +6,12 @@ from scipy.stats import norm
 from tqdm import tqdm
 from omegaconf import DictConfig, OmegaConf
 import os
+from argparse import ArgumentParser
 
 import torchaudio.functional as F
 
 from src.model import joint_Model
 from src.data import B2T_DataModule
-
 
 from src.utils import phonemize_text
 
@@ -29,7 +29,11 @@ def align(emission, targets):
 
 
 def main():
-    ckpt_path = "/home/arch/projects/brain2text/brain2text-main/outputs/2024-05-08_20-59-44/ckpts/last.ckpt"
+    parser = ArgumentParser()
+    parser.add_argument("--ckpt", type=str)
+    args = parser.parse_args()
+
+    ckpt_path = args.ckpt
 
     model = joint_Model.load_from_checkpoint(
         ckpt_path, decoders_conf=["ctc_al"], strict=False
@@ -48,6 +52,7 @@ def main():
             "valid_batch_size": 1,  # no padding
             # "debugging": True,
             "num_workers": 2,
+            "word_level":False
         }
     )
 

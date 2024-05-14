@@ -18,12 +18,9 @@ encoder:
     # - ["lstm", input_size, num_layers, bidirectional]
     # - ["t5_conv_cross_att", input_dims, n_layer]
 
-    # - ["conv", 768, 768, 3, 2, 4]
-    - ["conv", 256, 1024, 7, 2, 256]
-    - ["highway", 1024, 2]
-    - ["conv", 1024, 512, 3, 2, 1]
-    - ["highway", 512, 2]
-    - ["mamba", 512, 7, true]
+    - ["conv", 256, 768, 9, 4, 4]
+    # - ["highway", 768, 2]
+    - ["mamba", 768, 4, true]
 
 decoders_conf:
   # train multiple decoders at once
@@ -35,15 +32,15 @@ decoders_conf:
 
 decoders_layers:
   ctc_al:
-    - ["mamba", 512, 2, true]
+    - ["mamba", 768, 2, true]
   ctc_ph:
-    - ["mamba", 512, 1, true]
+    - ["mamba", 768, 1, true]
   dec_al:
     # - ["mamba", 512, 1, true]
-    - ["t5_dec", 512, 4]
+    - ["t5_dec", 768, 4]
   dec_ph:
     # - ["mamba", 512, 1, true]
-    - ["t5_dec", 512, 5]
+    - ["t5_dec", 768, 5]
 
 
 optimizer:

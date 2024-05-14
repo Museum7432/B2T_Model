@@ -22,7 +22,7 @@ encoder:
     - ["highway", 1024, 2]
     - ["conv", 1024, 512, 3, 2, 1]
     - ["highway", 512, 2]
-    - ["mamba", 512, 7, true]
+    - ["mamba", 512, 6, true]
 
 decoders_conf:
   # train multiple decoders at once
@@ -34,9 +34,9 @@ decoders_conf:
 
 decoders_layers:
   ctc_al:
-    - ["mamba", 512, 2, true]
+    - ["mamba", 512, 3, true]
   ctc_ph:
-    - ["mamba", 512, 2, true]
+    - ["mamba", 512, 1, true]
   dec_al:
     # - ["mamba", 512, 1, true]
     - ["t5_dec", 512, 5]

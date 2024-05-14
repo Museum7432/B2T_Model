@@ -17,7 +17,8 @@ from omegaconf import DictConfig
 from .utils import phonetic_decode, decode, vocab, phoneme_vocab
 import numpy as np
 
-from .modules.mamba import mamba_block
+from .modules.mamba_cu_seqlens import mamba_block
+# from .modules.mamba import mamba_block
 from .modules.t5_conv_cross_att import t5_conv_cross_att
 from .modules.lstm import lstm_block
 from .modules.highway import Highway
@@ -272,73 +273,6 @@ class CTC_decoder(L.LightningModule):
 
         return label
 
-
-# class whitespace_detection(L.LightningModule):
-#     def __init__(self, layers_config):
-#         super(whitespace_detection, self).__init__()
-#         self.layers_config = layers_config
-
-#         self.layers = modules_stack(layers_config)
-
-#         self.vocab_size = 3
-
-#         self.vocab = ["-", "|", "_"]
-
-#         self.linear = nn.Linear(self.layers.output_dims, self.vocab_size)
-
-#     def forward(self, hidden_states, input_lens):
-
-#         hidden_states, output_lens = self.layers(hidden_states, input_lens)
-
-#         hidden_states = self.linear(hidden_states)
-
-#         return hidden_states.log_softmax(-1), output_lens
-
-#     def calc_loss(self, hidden_states, input_lens, batch):
-#         logits, output_lens = self(hidden_states=hidden_states, input_lens=input_lens)
-
-#         labels = batch["WS_ids"]
-#         label_lens = batch["WS_ids_lens"]
-
-#         loss = F.ctc_loss(
-#             logits.transpose(0, 1),
-#             labels,
-#             output_lens,
-#             label_lens,
-#             zero_infinity=True,
-#         )
-
-#         return loss, logits, output_lens
-
-#     def batch_decode(self, ids, output_lens=None, raw_ouput=False):
-
-#         if output_lens is not None and not raw_ouput:
-#             temp = []
-#             for idx, s in enumerate(ids):
-#                 temp.append(s[: output_lens[idx]])
-#             ids = temp
-
-#         if not raw_ouput:
-#             ids = [[i for i, _ in itertools.groupby(s)] for s in ids]
-
-#         texts = ["".join([self.vocab[i] for i in s]) for s in ids]
-
-#         if raw_ouput:
-#             return texts
-
-#         texts = [s.replace("-", "").replace("_", "w").replace("|", " ") for s in texts]
-
-#         return texts
-
-#     def get_target_text(self, batch):
-
-#         label = batch["WS"]
-
-#         label = [s.replace("|", " ") for s in label]
-
-#         return label
-
-
 from transformers.models.t5.configuration_t5 import T5Config
 from transformers.models.t5.modeling_t5 import (
     T5Stack,
@@ -523,22 +457,20 @@ class joint_Model(BaseModel):
 
         self.decoders = nn.ModuleDict(modules)
 
-        # 0: padding
-        # 1: input
-        # 2: masked
-        # since mamba has not support masking out padded inputs
-        self.mask_tokens = nn.Embedding(
-            num_embeddings=3, embedding_dim=256, padding_idx=1
-        )
+        # # 0: input and padding
+        # # 1: mask
+        # self.mask_tokens = nn.Embedding(
+        #     num_embeddings=3, embedding_dim=256, padding_idx=0
+        # )
 
     def forward(self, spikePow, spikePow_mask, spikePow_lens, encoder_only=False):
         # _input (batch_size, input_len, input_channels)
 
-        mask_embeddings = self.mask_tokens(spikePow_mask)
+        # mask_embeddings = self.mask_tokens(spikePow_mask)
 
-        spikePow[spikePow_mask != 1, :] = 0
+        # spikePow[spikePow_mask != 1, :] = 0
 
-        spikePow = spikePow + mask_embeddings
+        # spikePow = spikePow + mask_embeddings
 
         hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
 

@@ -3,6 +3,7 @@ import scipy
 import os
 import numpy as np
 from scipy.stats import norm
+from argparse import ArgumentParser
 from tqdm import tqdm
 
 from src.utils import (
@@ -10,9 +11,8 @@ from src.utils import (
     phonetic_tokenize,
     clean_text,
     tokenize,
-    correct_channels
+    correct_channels,
 )
-
 
 # def fill_nan_1d(arr):
 #     mask = np.isnan(arr)
@@ -35,18 +35,17 @@ from src.utils import (
 #     # thres = max(thres, 1e-10)
 #     # thres = min(thres, 1e-10)
 
-#     thres = 1e-7
+#     thres = 1e-8
 #     outliers = probs < thres
 
 #     # outliers = spikePow_channel > _mean + 4 * _std
 #     # outliers[spikePow_channel < _mean - 4 * _std] = True
 
 #     temp = np.where(outliers, _mean, spikePow_channel)
-#     filtered = np.where(
-#         spikePow_channel[outliers] > _mean, temp.max(), spikePow_channel[outliers]
-#     )
-#     filtered = np.where(filtered < _mean, temp.min(), filtered)
-#     spikePow_channel[outliers] = filtered
+
+#     low = temp.min()
+#     high = temp.max()
+#     spikePow_channel = np.clip(spikePow_channel, low, high)
 
 #     # spikePow_channel[outliers] = _mean
 
@@ -67,18 +66,26 @@ from src.utils import (
 #         spikePow[:, c] = filter_noises_per_channel(spikePow[:, c])
 #     return spikePow
 
-def filter_noises(spikePow):
-    _mean = np.median(b, axis=0)
-    _std = np.median(np.abs(b - _mean), axis=0)
 
-    high = _mean + 8*_std
-    low = _mean - 8*_std
+def get_bound(_mean, _std, ep=1e-8):
+    part1 = np.sqrt(-np.log(ep * _std * np.pi) * 2)
 
-    spikePow = np.clip(spikePow, high=high, low=low)
+    high = _mean + _std * part1
+    low = _mean - _std * part1
+
+    return low, high
+
+
+def filter_noises(spikePow, block_mean, block_std, ep=1e-8):
+    # _mean = spikePow.mean(0)
+    # _std = spikePow.std(0)
+    # low, high = get_bound(_mean=_mean, _std=_std, ep=1e-8)
+
+    low, high = get_bound(_mean=block_mean, _std=block_std, ep=1e-8)
+    spikePow = np.clip(spikePow, low, high)
 
     return spikePow
 
-    
 
 def fix_text(text):
 
@@ -89,17 +96,17 @@ def fix_text(text):
         ["-", " "],
         ["?", " "],
         [",", " "],
-        ["\"", " "],
+        ['"', " "],
         ["in' ", "ing "],
         ["in'.", "ing."],
-        ["' ", " "], # 8 instances is not enough
+        ["' ", " "],  # 8 instances is not enough
         ["'em", "them"],
         [" 'll", "'ll"],
         [" 'd", "'d"],
         [" '", " "],
-        ["evidence'", "evidence"], # unique case
+        ["evidence'", "evidence"],  # unique case
         ["!", " "],
-        ["\"", " "],
+        ['"', " "],
         [":", " "],
         [";", " "],
         ["stirrin", "stirring"],
@@ -110,7 +117,7 @@ def fix_text(text):
         ["pricy", "pricey"],
         ["cucbers", "cucumbers"],
         ["premis", "premises"],
-        [" aking ", " making "]
+        [" aking ", " making "],
     ]
 
     for fro, to in replace_list:
@@ -121,6 +128,7 @@ def fix_text(text):
     cl_text = clean_text(text)
 
     return cl_text
+
 
 def load_file(path, has_labels=True):
     data = sio.loadmat(path)
@@ -137,42 +145,36 @@ def load_file(path, has_labels=True):
         selected_ids = data["blockIdx"].squeeze() == b_idx
 
         spikePow_block = data["spikePow"][0][selected_ids]
-
-        # this should fix all the realy large spikes
-        # spikePow_block = 1/(spikePow_block + 1)
-        spikePow_block = np.log10(spikePow_block + 1)
-
         spikePow_block = [correct_channels(i) for i in spikePow_block]
+        
+        # spikePow_block = [np.sqrt(i) for i in spikePow_block]
 
-        # features = np.vstack(spikePow_block)
+        spikePow_block_lens = [len(a) for a in spikePow_block]
 
-        # # block normalization
-        # _mean = np.median(features, axis=0)
-        # _std = np.median(np.abs(features - _mean), axis=0)
+        spikePow_block_start_indices = np.cumsum(spikePow_block_lens[:-1])
 
-        # high = _mean + 5*_std
-        # low = _mean - 5*_std
-
-        # spikePow_block = [np.clip(i, low, high) for i in spikePow_block]
-
-
-
-        # spikePow_block = [ scipy.ndimage.gaussian_filter1d(s, 2, axis=0) for s in spikePow_block]
-        spikePow_block = [scipy.signal.savgol_filter(s, 20, 2, axis=0) for s in spikePow_block]
-
+        # block normalization
         features = np.vstack(spikePow_block)
 
         _mean = np.median(features, axis=0)
         _std = np.median(np.abs(features - _mean), axis=0)
+
+        # features = filter_noises(features, _mean, _std)
+
         # _mean = features.mean(0)
-        # _mean = features.std(0)
+        # _std = features.std(0)
 
         block_mean_std = np.vstack([_mean, _std])
 
         block_mean_std = np.expand_dims(block_mean_std, 0)
 
         block_mean_std = np.broadcast_to(
-            block_mean_std, (len(spikePow_block), 2, len(features[0]))
+            block_mean_std,
+            (len(spikePow_block), block_mean_std.shape[1], len(features[0])),
+        )
+
+        spikePow_block = np.split(
+            features, indices_or_sections=spikePow_block_start_indices
         )
 
         spikePows += spikePow_block

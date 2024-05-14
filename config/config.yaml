@@ -19,7 +19,7 @@ data_module:
   val_data_dir: "${hydra:runtime.cwd}/dataset/valid"
   test_data_dir: "${hydra:runtime.cwd}/dataset/test"
   train_batch_size: 4
-  valid_batch_size: 4
+  valid_batch_size: 8
   num_workers: 8
   # debugging: true
   word_level: false
