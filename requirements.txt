@@ -13,7 +13,7 @@ einops
 hydra-core
 phonemizer
 local-attention
-mamba-ssm
+mamba-ssm @ git+https://github.com/zigzagcai/mamba.git@feat/add-cu_seqlens
 # flashlight-text
 # flashlight-textkenlm
 samplerate

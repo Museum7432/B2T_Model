@@ -144,18 +144,18 @@ class dataset(Dataset):
 
         spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
         
-        if self.add_noises:
-            noise = np.random.normal(loc=1, scale=0.01, size=spikePow.shape).astype(
-                "float32"
-            )
+        # if self.add_noises:
+        #     noise = np.random.normal(loc=1, scale=0.01, size=spikePow.shape).astype(
+        #         "float32"
+        #     )
 
-            spikePow = spikePow * noise
+        #     spikePow = spikePow * noise
 
-            noise2 = np.random.normal(loc=1, scale=0.05, size=spikePow.shape).astype(
-                "float32"
-            )
+        #     noise2 = np.random.normal(loc=1, scale=0.05, size=spikePow.shape).astype(
+        #         "float32"
+        #     )
 
-            block_mean = block_mean*noise2
+        #     block_mean = block_mean*noise2
 
         # block normalization
         spikePow = (spikePow - block_mean) / block_std
