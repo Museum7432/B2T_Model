@@ -49,7 +49,7 @@ decoders_layers:
 optimizer:
   warmup_perc: 0.1 # lr warmup for the first 10% of the training
   peak_lr: 2e-4
-  last_lr: 2e-6
+  last_lr: 1e-6
   beta_1: 0.9
   beta_2: 0.95
   weight_decay: 0.1

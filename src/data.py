@@ -18,7 +18,6 @@ from .utils import (
     vocab,
 )
 
-
 def get_bound(_mean, _std, ep=1e-8):
     part1 = np.sqrt(-np.log(ep * _std * np.pi) * 2)
 
@@ -33,7 +32,7 @@ def filter_noises(spikePow, block_mean, block_std, ep=1e-8):
     # _std = spikePow.std(0)
     # low, high = get_bound(_mean=_mean, _std=_std, ep=1e-8)
 
-    low, high = get_bound(_mean=block_mean, _std=block_std, ep=1e-8)
+    low, high = get_bound(_mean=block_mean, _std=block_std, ep=ep)
     spikePow = np.clip(spikePow, low, high)
 
     return spikePow
@@ -131,7 +130,21 @@ class dataset(Dataset):
             sentenceText = self.sentenceTexts[idx].replace(" ", "|")
             phonemizedText = self.phonemizedTexts[idx].replace(" ", "|")
 
+        if self.add_noises:
+            noise = np.random.normal(loc=1, scale=0.01, size=spikePow.shape).astype(
+                "float32"
+            )
 
+            spikePow = spikePow * noise
+
+            noise2 = np.random.normal(loc=1, scale=0.05, size=spikePow.shape).astype(
+                "float32"
+            )
+
+            block_mean = block_mean*noise2
+
+        spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
+        
         # if self.add_noises:
         #     noise_ratio = np.random.rand()/40
         #     n_std = block_std * noise_ratio
@@ -139,36 +152,30 @@ class dataset(Dataset):
         #     noise = np.random.normal(loc=0, scale=n_std, size=spikePow.shape).astype(
         #         "float32"
         #     )
-
         #     spikePow = spikePow + noise
-
-        spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
-        
-        # if self.add_noises:
-        #     noise = np.random.normal(loc=1, scale=0.01, size=spikePow.shape).astype(
-        #         "float32"
-        #     )
-
-        #     spikePow = spikePow * noise
-
-        #     noise2 = np.random.normal(loc=1, scale=0.05, size=spikePow.shape).astype(
-        #         "float32"
-        #     )
-
-        #     block_mean = block_mean*noise2
 
         # block normalization
         spikePow = (spikePow - block_mean) / block_std
 
 
-
         # smoothing
-        sigma = 1
+        sigma = 0.8
         # if self.add_noises:
         #     sigma = np.random.normal(loc=sigma, scale=0.1)
         spikePow = scipy.ndimage.gaussian_filter1d(spikePow, sigma, axis=0)
         # spikePow = scipy.signal.savgol_filter(spikePow, 20, 2, axis=0)
 
+
+
+        # if self.add_noises:
+        #     noise_ratio = np.random.rand()/80
+        #     n_std = 1 * noise_ratio
+
+        #     noise = np.random.normal(loc=0, scale=n_std, size=spikePow.shape).astype(
+        #         "float32"
+        #     )
+
+        #     spikePow = spikePow + noise
 
 
         # if self.add_noises and np.random.rand() < 0.15:
@@ -504,7 +511,8 @@ def collate_fn_factory(add_noises=False):
             batch["spikePow"][i] = np.pad(
                 batch["spikePow"][i],
                 ((_start, _end), (0, 0)),
-                mode="edge"
+                # mode="edge"
+                constant_values=0
             )
             batch["spikePow_mask"][i] = np.pad(
                 batch["spikePow_mask"][i], (_start, _end), constant_values=0

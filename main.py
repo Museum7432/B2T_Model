@@ -15,6 +15,8 @@ from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 
 import wandb
 
+import shutil
+
 
 @hydra.main(version_base="1.3", config_path="config", config_name="config")
 def main(config: DictConfig):
@@ -22,6 +24,11 @@ def main(config: DictConfig):
     working_dir = os.getcwd()
 
     original_cwd = hydra.utils.get_original_cwd()
+
+    shutil.copyfile(
+        os.path.join(original_cwd, "src/data.py"),
+        os.path.join(working_dir, ".hydra/data.py")
+    )
 
     print(f"The current working directory is {working_dir}")
 
