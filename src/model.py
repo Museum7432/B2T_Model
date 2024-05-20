@@ -3,6 +3,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
+from transformers.optimization import get_linear_schedule_with_warmup
 
 # from torchmetrics.text import WordErrorRate
 import torchmetrics
@@ -17,9 +18,10 @@ from omegaconf import DictConfig
 from .utils import phonetic_decode, decode, vocab, phoneme_vocab
 import numpy as np
 
-from .modules.mamba_cu_seqlens import mamba_block
+
+from .modules.mamba_cu_seqlens import mamba_block, mamba_block_for_input_ids
+
 # from .modules.mamba import mamba_block
-from .modules.t5_conv_cross_att import t5_conv_cross_att
 from .modules.lstm import lstm_block
 from .modules.highway import Highway
 from .modules.conv import conv_block
@@ -101,10 +103,6 @@ class modules_stack(L.LightningModule):
                 _, input_dims, n_layer = l
                 modules_list.append(t5_encoder(input_dims, n_layer))
 
-            elif l[0] == "t5_conv_cross_att":
-                _, input_dims, n_layer = l
-                modules_list.append(t5_conv_cross_att(input_dims, n_layer))
-
             elif l[0] == "lstm":
                 _, input_size, num_layers, bidirectional = l
                 modules_list.append(lstm_block(input_size, num_layers, bidirectional))
@@ -156,6 +154,16 @@ class BaseModel(L.LightningModule):
             betas=betas,
             eps=self.config.optimizer.eps,
         )
+
+
+        num_steps = self.num_steps()
+        self.lr_scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=int(num_steps * self.config.optimizer.warmup_perc),
+            num_training_steps=num_steps,
+        )
+        return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]
+
 
         def get_scheduler(
             optimizer, num_training_steps, warmup_steps, peak_lr, last_lr
@@ -217,6 +225,16 @@ class CTC_decoder(L.LightningModule):
 
         return hidden_states.log_softmax(-1), output_lens
 
+    def disable_grad(self):
+        self.orig_requires_grads = [p.requires_grad for p in self.parameters()]
+
+        for p in self.parameters():
+            p.requires_grad = False
+
+    def enable_grad(self):
+        for p, rg in zip(self.parameters(), self.orig_requires_grads):
+            p.requires_grad = rg
+
     def calc_loss(self, hidden_states, input_lens, batch):
         logits, output_lens = self(hidden_states=hidden_states, input_lens=input_lens)
 
@@ -273,6 +291,7 @@ class CTC_decoder(L.LightningModule):
 
         return label
 
+
 from transformers.models.t5.configuration_t5 import T5Config
 from transformers.models.t5.modeling_t5 import (
     T5Stack,
@@ -323,6 +342,16 @@ class decoder(L.LightningModule):
             eos_token_id=self.eos_token_id,
         )
         self.t5_model = T5ForConditionalGeneration(t5_config)
+
+    def disable_grad(self):
+        self.orig_requires_grads = [p.requires_grad for p in self.parameters()]
+
+        for p in self.parameters():
+            p.requires_grad = False
+
+    def enable_grad(self):
+        for p, rg in zip(self.parameters(), self.orig_requires_grads):
+            p.requires_grad = rg
 
     def forward(self, hidden_states, input_lens, labels=None):
         hidden_states, output_lens = self.layers(hidden_states, input_lens)
@@ -382,6 +411,10 @@ class decoder(L.LightningModule):
         if raw_ouput:
             return texts
 
+        for i in range(len(texts)):
+            if "_" in texts[i]:
+                texts[i] = texts[: texts.index("_")]
+
         texts = [s.replace("|", " ").replace("-", "").replace("_", "") for s in texts]
 
         return texts
@@ -422,12 +455,22 @@ def get_decoder(decoder_type, layers_config):
 
 
 class joint_Model(BaseModel):
-    def __init__(self, config: DictConfig, decoders_conf=None):
+    def __init__(self, config: DictConfig, decoders_conf=None, use_people_speech=None):
         # decoder_conf: if not none, only load those layers
         super(joint_Model, self).__init__()
         self.save_hyperparameters()
 
         self.config = config
+
+        if use_people_speech is None:
+            if config.get("use_people_speech"):
+                self.use_people_speech = config.use_people_speech
+            else:
+                self.use_people_speech = False
+        else:
+            self.use_people_speech = use_people_speech
+
+        self.word_level = config.get("word_level")
 
         self.encoder = modules_stack(config.encoder.layers)
 
@@ -457,20 +500,27 @@ class joint_Model(BaseModel):
 
         self.decoders = nn.ModuleDict(modules)
 
-        # # 0: input and padding
-        # # 1: mask
-        # self.mask_tokens = nn.Embedding(
-        #     num_embeddings=3, embedding_dim=256, padding_idx=0
-        # )
+        if self.use_people_speech:
+            self.people_speech_encoder = mamba_block_for_input_ids(
+                d_model=self.encoder.output_dims,
+                n_layer=4,
+                bidirectional=True,
+                vocab_size=len(phoneme_vocab) - 1,
+            )
+
+        if self.word_level:
+            # 0: input and padding
+            # 1: mask
+            self.mask_tokens = nn.Embedding(
+                num_embeddings=2, embedding_dim=256, padding_idx=0
+            )
 
     def forward(self, spikePow, spikePow_mask, spikePow_lens, encoder_only=False):
         # _input (batch_size, input_len, input_channels)
-
-        # mask_embeddings = self.mask_tokens(spikePow_mask)
-
-        # spikePow[spikePow_mask != 1, :] = 0
-
-        # spikePow = spikePow + mask_embeddings
+        if self.word_level:
+            mask_embeddings = self.mask_tokens(spikePow_mask)
+            spikePow[spikePow_mask != 0, :] = 0
+            spikePow = spikePow + mask_embeddings
 
         hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
 
@@ -512,10 +562,44 @@ class joint_Model(BaseModel):
         for l, w in zip(losses, self.decoder_loss_weights):
             loss += l * w
 
-        for k, l in zip(self.decoders.keys(), losses):
-            self.log(f"train_{k}_loss", l, batch_size=len(batch["spikePow"]))
-
         self.log("train_loss", loss.detach(), prog_bar=True)
+
+        if self.use_people_speech:
+            ps_hidden_states, ps_output_lens = self.people_speech_encoder(
+                input_ids=batch["ps_input_ids"], input_lens=batch["ps_input_ids_lens"]
+            )
+
+            for i, (k, d) in enumerate(self.decoders.items()):
+                # the label of people speech is text not phonemized text
+                if d.phoneme_rec:
+                    continue
+
+                disable_grad = np.random.rand() < 0.5
+
+                if disable_grad:
+                    d.disable_grad()
+
+                ps_loss, _, _ = d.calc_loss(
+                    ps_hidden_states,
+                    ps_output_lens,
+                    {
+                        "sent_ids": batch["ps_label"],
+                        "sent_ids_len": batch["ps_label_lens"],
+                    },
+                )
+
+                if disable_grad:
+                    d.enable_grad()
+
+                # losses[i] = losses[i] + ps_loss * 0.5
+                loss += ps_loss * 0.1
+
+                self.log(
+                    f"ps_{k}_loss", ps_loss.detach(), batch_size=len(batch["spikePow"])
+                )
+
+        for k, l in zip(self.decoders.keys(), losses):
+            self.log(f"train_{k}_loss", l.detach(), batch_size=len(batch["spikePow"]))
 
         return loss
 

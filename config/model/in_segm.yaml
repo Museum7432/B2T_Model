@@ -2,6 +2,8 @@
 
 input_dims: 256
 
+# use_people_speech: true
+
 max_epochs: 10
 word_level: false
 val_check_interval: 0.5
@@ -23,7 +25,7 @@ encoder:
     - ["highway", 1024, 2]
     - ["conv", 1024, 512, 3, 2, 1]
     - ["highway", 512, 2]
-    - ["mamba", 512, 7, true]
+    - ["mamba", 512, 6, true]
 
 decoders_conf:
   # train multiple decoders at once
@@ -35,9 +37,9 @@ decoders_conf:
 
 decoders_layers:
   ctc_al:
-    - ["mamba", 512, 2, true]
+    - ["mamba", 512, 5, true]
   ctc_ph:
-    - ["mamba", 512, 1, true]
+    - ["mamba", 512, 2, true]
   dec_al:
     # - ["mamba", 512, 1, true]
     - ["t5_dec", 512, 4]
@@ -47,8 +49,8 @@ decoders_layers:
 
 
 optimizer:
-  warmup_perc: 0.1 # lr warmup for the first 10% of the training
-  peak_lr: 2e-4
+  warmup_perc: 0.2 # lr warmup for the first 10% of the training
+  peak_lr: 1e-4
   last_lr: 1e-6
   beta_1: 0.9
   beta_2: 0.95

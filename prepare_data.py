@@ -118,6 +118,8 @@ def fix_text(text):
         ["cucbers", "cucumbers"],
         ["premis", "premises"],
         [" aking ", " making "],
+        [" aking ", " making "],
+        [" ain't ", " aren't "]
     ]
 
     for fro, to in replace_list:

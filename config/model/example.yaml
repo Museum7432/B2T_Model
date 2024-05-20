@@ -2,6 +2,10 @@
 
 input_dims: 256
 
+max_epochs: 10
+word_level: false
+val_check_interval: 0.5
+
 encoder:
   layers:
     # - ["mamba", input_channels, n_layer, bidirectional]

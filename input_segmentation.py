@@ -7,7 +7,7 @@ from tqdm import tqdm
 from omegaconf import DictConfig, OmegaConf
 import os
 from argparse import ArgumentParser
-
+import pickle
 import torchaudio.functional as F
 
 from src.model import joint_Model
@@ -26,6 +26,15 @@ def align(emission, targets):
     )  # remove batch dimension for simplicity
     scores = scores.exp()  # convert back to probability
     return alignments, scores
+
+def unflatten(list_, lengths):
+    assert len(list_) == sum(lengths)
+    i = 0
+    ret = []
+    for l in lengths:
+        ret.append(list_[i : i + l])
+        i += l
+    return ret
 
 
 def main():
@@ -61,17 +70,9 @@ def main():
 
     dataloader = dm.val_dataloader()
 
-    spikePow_indices = np.load(os.path.join(input_dir, "spikePow_indices.npy"))
-    sp_idx = 0
-
-    sentence_id = []
-
-    words_list = []
-
     word_sp_indices = []
 
     for batch in tqdm(dataloader):
-        _start, _end = spikePow_indices[sp_idx]
 
         emission = (
             model(
@@ -87,53 +88,33 @@ def main():
 
         target_text = batch["sent"][0]
 
+        TRANSCRIPT = target_text.split("|")
         aligned_tokens, alignment_scores = align(emission, targets_ids)
 
         token_spans = F.merge_tokens(aligned_tokens, alignment_scores)
 
-        seperators_id = []
-        for t in token_spans:
-            if t.token == 1:
-                seperators_id.append((t.start + t.end + 1) // 2)
+        token_spans = [i for i in token_spans if i.token != 1]
 
-        # seperators_id = [0] + seperators_id + [len(emission[0]) - 1]
+        word_spans = unflatten(token_spans, [len(word) for word in TRANSCRIPT])
 
-        # convert to index of spikePow
-        seperators_id = [i * 4 + 2 + _start for i in seperators_id]
 
-        seperators_id = [_start] + seperators_id + [_end]
+        # index of the start and end of each word in spikePow
+        word_indices = []
 
-        assert max(seperators_id) <= _end
+        for w_span in word_spans:
+            # convert to index of spikePow
+            s_start = w_span[0].start * 4
+            s_end = w_span[-1].end * 4 + 3
 
-        word_spans = [
-            [seperators_id[i], seperators_id[i + 1]]
-            for i in range(0, len(seperators_id) - 1)
-        ]
+            word_indices.append([
+                s_start,
+                s_end
+            ])
 
-        words = target_text.split("|")
+        word_sp_indices.append(word_indices)
 
-        assert len(words) == len(word_spans)
-
-        sentence_id += [sp_idx] * len(words)
-        words_list += words
-
-        word_sp_indices.append(word_spans)
-
-        sp_idx += 1
-
-    word_sp_indices = np.vstack(word_sp_indices)
-
-    ph_words_list = phonemize_text(words_list)
-
-    words_list = np.array(words_list)
-
-    sentence_id = np.array(sentence_id)
-
-    np.save(os.path.join(input_dir, "words_list.npy"), words_list)
-    np.save(os.path.join(input_dir, "ph_words_list.npy"), ph_words_list)
-    np.save(os.path.join(input_dir, "word_sp_indices.npy"), word_sp_indices)
-    np.save(os.path.join(input_dir, "sentence_id.npy"), sentence_id)
-
+    with open(os.path.join(input_dir, "word_sp_indices.npy"), 'wb') as handle:
+        pickle.dump(word_sp_indices, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     main()

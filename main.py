@@ -54,6 +54,9 @@ def main(config: DictConfig):
     if config.model.get("word_level"):
         config.data_module.word_level=config.model.word_level
 
+    if config.model.get("use_people_speech"):
+        config.data_module.use_people_speech=config.model.use_people_speech
+
     # load datamodule
     data_module = B2T_DataModule(config.data_module)
 

@@ -12,6 +12,7 @@ from torch.nn import functional as F
 class MambaConfig:
     d_model: int = 2560
     n_layer: int = 64
+    vocab_size: int = 1
     ssm_cfg: dict = field(default_factory=dict)
     rms_norm: bool = True
     residual_in_fp32: bool = True
@@ -71,6 +72,22 @@ def pack(hidden_states, cu_seqlens):
     packed_hidden_states = hidden_states[mask_3d].view(-1, hidden_dim)
     return packed_hidden_states
 
+def pack2d(input_ids, cu_seqlens):
+    batch_size, seq_len = input_ids.shape
+
+    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
+    
+    seq_len_list_2d = seq_len_list.unsqueeze(1)
+
+    indices_2d = (
+        torch.arange(seq_len, device=input_ids.device)
+        .unsqueeze(0)
+        .repeat(batch_size, 1)
+    )
+
+    mask_2d = indices_2d < seq_len_list_2d
+    packed_input_ids = input_ids[mask_2d].view(-1)
+    return packed_input_ids
 
 class Block(nn.Module):
     def __init__(
@@ -374,7 +391,7 @@ class MixerModel(nn.Module):
         return hidden_states
 
 
-class MambaFeatureExtractor(nn.Module):
+class MambaBlock(nn.Module):
 
     def __init__(
         self,
@@ -440,6 +457,52 @@ class MambaFeatureExtractor(nn.Module):
         return hidden_states
 
 
+class mamba_block_for_input_ids(nn.Module):
+    def __init__(self, d_model, n_layer, bidirectional, vocab_size):
+        super(mamba_block_for_input_ids, self).__init__()
+
+        self.input_dims = d_model
+        self.output_dims = d_model
+
+        self.vocab_size = vocab_size
+
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        
+        self.model = MambaBlock(
+            MambaConfig(
+                d_model=d_model,
+                n_layer=n_layer,
+                bidirectional=bidirectional,
+            )
+        )
+    def forward(self, input_ids, input_lens):
+
+        if input_ids.size(0) == 1:
+            cu_seqlens = None
+            packed_input_ids = input_ids
+        else:
+            cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1,0), value=0).to(torch.int32)
+            packed_input_ids = pack2d(input_ids, cu_seqlens).unsqueeze(0)
+
+        packed_hidden_states = self.embedding(packed_input_ids)
+
+        packed_hidden_states = self.model(packed_hidden_states, cu_seqlens=cu_seqlens)
+
+        if input_ids.size(0) == 1:
+            hidden_states = packed_hidden_states
+        else:
+            hidden_states = unpack(packed_hidden_states, cu_seqlens)
+
+        return hidden_states, input_lens
+
+    # def forward(self, input_ids, input_lens):
+
+    #     hidden_states = self.embedding(input_ids)
+
+    #     hidden_states = self.model(hidden_states)
+
+    #     return hidden_states, input_lens
+
 class mamba_block(nn.Module):
     def __init__(self, d_model, n_layer, bidirectional):
         super(mamba_block, self).__init__()
@@ -447,7 +510,7 @@ class mamba_block(nn.Module):
         self.input_dims = d_model
         self.output_dims = d_model
         
-        self.model = MambaFeatureExtractor(
+        self.model = MambaBlock(
             MambaConfig(
                 d_model=d_model,
                 n_layer=n_layer,
