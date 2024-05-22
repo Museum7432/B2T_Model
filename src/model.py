@@ -155,15 +155,13 @@ class BaseModel(L.LightningModule):
             eps=self.config.optimizer.eps,
         )
 
-
-        num_steps = self.num_steps()
-        self.lr_scheduler = get_linear_schedule_with_warmup(
-            self.optimizer,
-            num_warmup_steps=int(num_steps * self.config.optimizer.warmup_perc),
-            num_training_steps=num_steps,
-        )
-        return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]
-
+        # num_steps = self.num_steps()
+        # self.lr_scheduler = get_linear_schedule_with_warmup(
+        #     self.optimizer,
+        #     num_warmup_steps=int(num_steps * self.config.optimizer.warmup_perc),
+        #     num_training_steps=num_steps,
+        # )
+        # return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]
 
         def get_scheduler(
             optimizer, num_training_steps, warmup_steps, peak_lr, last_lr
@@ -455,20 +453,20 @@ def get_decoder(decoder_type, layers_config):
 
 
 class joint_Model(BaseModel):
-    def __init__(self, config: DictConfig, decoders_conf=None, use_people_speech=None):
+    def __init__(self, config: DictConfig, decoders_conf=None, use_addtional_corpus=None):
         # decoder_conf: if not none, only load those layers
         super(joint_Model, self).__init__()
         self.save_hyperparameters()
 
         self.config = config
 
-        if use_people_speech is None:
-            if config.get("use_people_speech"):
-                self.use_people_speech = config.use_people_speech
+        if use_addtional_corpus is None:
+            if config.get("use_addtional_corpus"):
+                self.use_addtional_corpus = config.use_addtional_corpus
             else:
-                self.use_people_speech = False
+                self.use_addtional_corpus = False
         else:
-            self.use_people_speech = use_people_speech
+            self.use_addtional_corpus = use_addtional_corpus
 
         self.word_level = config.get("word_level")
 
@@ -500,10 +498,10 @@ class joint_Model(BaseModel):
 
         self.decoders = nn.ModuleDict(modules)
 
-        if self.use_people_speech:
-            self.people_speech_encoder = mamba_block_for_input_ids(
+        if self.use_addtional_corpus:
+            self.text2prep_encoder = mamba_block_for_input_ids(
                 d_model=self.encoder.output_dims,
-                n_layer=4,
+                n_layer=5,
                 bidirectional=True,
                 vocab_size=len(phoneme_vocab) - 1,
             )
@@ -555,6 +553,42 @@ class joint_Model(BaseModel):
 
         return losses, logits, out_lens
 
+    def calc_additional_corpus_loss(self, batch):
+        ps_hidden_states, ps_output_lens = self.text2prep_encoder(
+            input_ids=batch["ps_input_ids"], input_lens=batch["ps_input_ids_lens"]
+        )
+
+        self.decoders["ctc_al1"].disable_grad()
+        # force the text2rep model to learn the latent space
+        # prepresentation of the encoder
+        loss1, _, _ = self.decoders["ctc_al1"].calc_loss(
+            ps_hidden_states,
+            ps_output_lens,
+            {
+                "sent_ids": batch["ps_label"],
+                "sent_ids_len": batch["ps_label_lens"],
+            },
+        )
+        self.decoders["ctc_al1"].enable_grad()
+
+        self.log(
+            f"al1_addi_l", add_loss.detach(), batch_size=len(batch["spikePow"])
+        )
+
+        loss, _, _ = self.decoders["ctc_al"].calc_loss(
+            ps_hidden_states.detach(),
+            ps_output_lens,
+            {
+                "sent_ids": batch["ps_label"],
+                "sent_ids_len": batch["ps_label_lens"],
+            },
+        )
+        self.log(
+            f"al_addi_l", loss.detach(), batch_size=len(batch["spikePow"])
+        )
+
+        return (loss1 + loss) / 2
+
     def training_step(self, batch):
         losses, logits, output_lens = self.calc_loss(batch)
 
@@ -564,39 +598,11 @@ class joint_Model(BaseModel):
 
         self.log("train_loss", loss.detach(), prog_bar=True)
 
-        if self.use_people_speech:
-            ps_hidden_states, ps_output_lens = self.people_speech_encoder(
-                input_ids=batch["ps_input_ids"], input_lens=batch["ps_input_ids_lens"]
-            )
+        if self.use_addtional_corpus:
 
-            for i, (k, d) in enumerate(self.decoders.items()):
-                # the label of people speech is text not phonemized text
-                if d.phoneme_rec:
-                    continue
+            add_loss = self.calc_additional_corpus_loss(batch)
 
-                disable_grad = np.random.rand() < 0.5
-
-                if disable_grad:
-                    d.disable_grad()
-
-                ps_loss, _, _ = d.calc_loss(
-                    ps_hidden_states,
-                    ps_output_lens,
-                    {
-                        "sent_ids": batch["ps_label"],
-                        "sent_ids_len": batch["ps_label_lens"],
-                    },
-                )
-
-                if disable_grad:
-                    d.enable_grad()
-
-                # losses[i] = losses[i] + ps_loss * 0.5
-                loss += ps_loss * 0.1
-
-                self.log(
-                    f"ps_{k}_loss", ps_loss.detach(), batch_size=len(batch["spikePow"])
-                )
+            loss += add_loss * 0.1
 
         for k, l in zip(self.decoders.keys(), losses):
             self.log(f"train_{k}_loss", l.detach(), batch_size=len(batch["spikePow"]))

@@ -1,7 +1,7 @@
 # B2T model configs
 
 input_dims: 256
-
+use_addtional_corpus: false
 max_epochs: 10
 word_level: false
 val_check_interval: 0.5

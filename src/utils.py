@@ -4,6 +4,43 @@ from phonemizer.separator import Separator
 import itertools
 
 
+import gdown
+import os
+import wget
+
+
+def download_files():
+    dataset_dir = "./dataset"
+
+    os.makedirs(dataset_dir, exist_ok=True)
+
+    f_list = [
+        ["test", "gfolder", "1v6lMnlrPsG0f71_FgsBhx712lLa695Qe"],
+        ["train", "gfolder", "179Qx7YxLs1X1-uMR2Z5OhUeMIQrs0RsK"],
+        ["valid", "gfolder", "1UaE9sCBn5xxJ4EiRrpnlcKC6_rIcf4Jp"],
+        [
+            "en_us_cmudict_forward.pt",
+            "file",
+            "https://public-asai-dl-models.s3.eu-central-1.amazonaws.com/DeepPhonemizer/en_us_cmudict_forward.pt",
+        ],
+    ]
+
+    for dir_name, ftype, gd_id in f_list:
+        output_path = os.path.join(dataset_dir, dir_name)
+        if os.path.isdir(output_path) or os.path.isfile(output_path):
+            continue
+
+        if ftype == "gfolder":
+            gdown.download_folder(id=gd_id, output=output_path)
+        elif ftype == "gfile":
+            gdown.download(id=gd_id, output=output_path)
+        elif ftype == "file":
+            wget.download(gd_id, output_path)
+
+
+download_files()
+
+
 # require "festival" to be installed
 
 # el, em, en, pau not found in trainning dataset
@@ -47,12 +84,12 @@ def phonetic_tokenize(text):
     # nuclear rockets
     # n-uw+k-l-iy+er|r-aa+k-ax-t-s
 
-    text = text.replace('|', ',|,')
+    text = text.replace("|", ",|,")
 
-    text = text.replace('-', ',')
-    text = text.replace('+', ',')
+    text = text.replace("-", ",")
+    text = text.replace("+", ",")
 
-    tokens = text.split(',')
+    tokens = text.split(",")
     return [phoneme_vocab.index(c) for c in tokens]
 
 
@@ -68,15 +105,16 @@ vocab = [c for c in "-|etaonihsrdlumwcfgypbvk'xjqz_"]
 
 ctc_vocab = vocab[:-1]
 
+
 def tokenize(text):
     return [vocab.index(c) for c in text]
+
 
 def decode(ids, remove_consecutive=False):
     if remove_consecutive:
         ids = [i for i, _ in itertools.groupby(ids)]
 
     return "".join([vocab[i] for i in ids])
-
 
 
 correct_pos = np.array(

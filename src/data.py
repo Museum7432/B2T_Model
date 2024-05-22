@@ -19,34 +19,6 @@ from .utils import (
     vocab,
 )
 
-import gdown
-import os
-
-
-def download_files():
-    dataset_dir = "./dataset"
-
-    os.makedirs(dataset_dir, exist_ok=True)
-
-    f_list = [
-        ["test", "folder", "1v6lMnlrPsG0f71_FgsBhx712lLa695Qe"],
-        ["train", "folder", "179Qx7YxLs1X1-uMR2Z5OhUeMIQrs0RsK"],
-        ["valid", "folder", "1UaE9sCBn5xxJ4EiRrpnlcKC6_rIcf4Jp"],
-    ]
-
-    for dir_name, ftype, gd_id in f_list:
-        output_path = os.path.join(dataset_dir, dir_name)
-        if os.path.isdir(output_path) or os.path.isfile(output_path):
-            continue
-
-        if ftype == "folder":
-            gdown.download_folder(id=gd_id, output=output_path)
-        else:
-            gdown.download(id=gd_id, output=output_path)
-
-
-download_files()
-
 
 def get_bound(_mean, _std, ep=1e-8):
     part1 = np.sqrt(-np.log(ep * _std * np.pi) * 2)
@@ -97,21 +69,21 @@ class dataset(Dataset):
         add_noises=False,
         word_level=False,
         has_label=True,
-        use_people_speech=False,
+        use_addtional_corpus=False,
     ):
         self.debugging = debugging
         self.add_noises = add_noises
         self.word_level = word_level
         self.has_label = has_label
-        self.use_people_speech = use_people_speech
+        self.use_addtional_corpus = use_addtional_corpus
 
         if data_dir is None:
             return
 
-        if use_people_speech:
+        if use_addtional_corpus:
             # text extract from the people_speech dataset
             # force the model to learn grammar
-            self.people_speech_text_path = os.path.join(data_dir, "people_speech.npy")
+            self.addtional_corpus_path = os.path.join(data_dir, "people_speech.npy")
 
         # self.spikePows = np.load(os.path.join(data_dir, "spikePows.npy"),mmap_mode="r")
         # reconstruct the np.mmap every itteration is way more memory efficient
@@ -144,8 +116,8 @@ class dataset(Dataset):
     def __len__(self):
         return len(self.spikePow_indices)
 
-    def get_people_speech(self):
-        texts = np.load(self.people_speech_text_path, mmap_mode="r")
+    def get_addtional_courpus(self):
+        texts = np.load(self.addtional_corpus_path, mmap_mode="r")
         idx = np.random.randint(len(texts))
 
         text, ph_text = texts[idx]
@@ -233,43 +205,23 @@ class dataset(Dataset):
         spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
 
         ############################
-        noise = 0
+        # noise = 0
         if self.add_noises:
-            #     noise = np.random.normal(loc=1, scale=0.05, size=spikePow.shape).astype(
-            #         "float32"
-            #     )
-            #     spikePow = spikePow * noise
+            # noise_std = np.random.rand() * 0.25
+            # noise = np.random.normal(
+            #     loc=1, scale=noise_std, size=spikePow.shape
+            # ).astype("float32")
+            # spikePow = spikePow * noise
 
-            #     noise2 = np.random.normal(loc=1, scale=0.1, size=spikePow.shape).astype(
-            #         "float32"
-            #     )
+            noise = np.random.normal(
+                loc=1, scale=0.2, size=spikePow.shape
+            ).astype("float32")
+            spikePow = spikePow * noise
 
-            #     block_mean = block_mean*noise2
-
-            # scale = block_std * 0.1
-            # noise = np.random.normal(loc=0, scale=scale, size=spikePow.shape).astype(
-            #     "float32"
-            # )
-            # spikePow = spikePow + noise
-
-            noise_ratio = np.random.rand() / 2
-            n_std = block_std * noise_ratio
-
-            noise = np.random.normal(loc=0, scale=n_std, size=spikePow.shape).astype(
-                "float32"
-            )
-
-        #     spikePow = spikePow + noise
-
-        # if self.add_noises:
-        #     n_std = block_std * 0.5
-        #     noise = np.random.normal(loc=0, scale=n_std, size=spikePow.shape).astype(
-        #         "float32"
-        #     )
         ############################
 
         # block normalization
-        spikePow = (spikePow - block_mean + noise) / block_std
+        spikePow = (spikePow - block_mean) / block_std
 
         # smoothing
         sigma = 0.8
@@ -306,20 +258,24 @@ class dataset(Dataset):
             spikePow, spikePow_mask, sentenceText, phonemizedText = self.mask_word(
                 idx, spikePow, spikePow_mask, sentenceText, phonemizedText
             )
+        
+        # if self.add_noises and np.random.rand() < 0.25:
+        #     # blank out quater of the input channels randomly
+        #     _start = np.random.randint(3) * 64
+        #     _end = _start + 64
+        #     spikePow[:, _start:_end] = 0
+    
         # shift spikePow randomly
         if self.add_noises:
-            _start = np.random.randint(32)
-            # spikePow = spikePow[_start:]
-            # spikePow_mask = spikePow_mask[_start:]
+            _start = np.random.randint(5)
+            spikePow = spikePow[_start:]
+            spikePow_mask = spikePow_mask[_start:]
 
-            spikePow = np.pad(
-                spikePow,
-                ((_start, 0), (0, 0)),
-                # mode="edge"
-                constant_values=0,
-            )
-            spikePow_mask = np.pad(spikePow_mask, (_start, 0), constant_values=0)
-
+        # shift spikePow randomly
+        # if self.add_noises:
+        #     _start = np.random.randint(8)
+        #     spikePow = spikePow[_start:]
+        #     spikePow_mask = spikePow_mask[_start:]
         re = {
             "spikePow": spikePow,
             "spikePow_mask": spikePow_mask,
@@ -333,8 +289,8 @@ class dataset(Dataset):
 
         eos_id = len(vocab) - 1
 
-        # tokenized = [1] + tokenized + [1, eos_id]
-        tokenized = tokenized + [eos_id]
+        tokenized = [1] + tokenized + [1, eos_id]
+        # tokenized = tokenized + [eos_id]
 
         re["sent"] = sentenceText
 
@@ -345,17 +301,17 @@ class dataset(Dataset):
 
         ph_eos_id = len(phoneme_vocab) - 1
 
-        # ph = [1] + ph + [1, ph_eos_id]
-        ph = ph + [ph_eos_id]
+        ph = [1] + ph + [1, ph_eos_id]
+        # ph = ph + [ph_eos_id]
 
         re["phonemized"] = phonemizedText
         re["phonemize_ids"] = ph
         re["phonemize_ids_len"] = len(ph)
 
-        if not self.use_people_speech:
+        if not self.use_addtional_corpus:
             return re
 
-        ps_input_ids, ps_label = self.get_people_speech()
+        ps_input_ids, ps_label = self.get_addtional_courpus()
 
         re["ps_input_ids"] = ps_input_ids
         re["ps_input_ids_lens"] = len(ps_input_ids)
@@ -431,31 +387,43 @@ def collate_fn_factory(add_noises=False):
         # pad spikePow and spikePow_mask
         target_length = max([len(i) for i in batch["spikePow"]])
 
-        if add_noises:
-            target_length += np.random.randint(10)
+        # if add_noises:
+        #     target_length += np.random.randint(10)
 
         for i in range(len(batch["spikePow"])):
-            additional = target_length - len(batch["spikePow"][i])
+
+            spikePow = batch["spikePow"][i]
+            spikePow_mask = batch["spikePow_mask"][i]
+
+            additional = target_length - len(spikePow)
 
             _start = 0
 
             # if not add_noises and additional > 0:
             #     _start = np.random.randint(additional)
-            #     _start = _start % 10
+            #     _start = _start % 64
 
             _end = additional - _start
 
-            batch["spikePow"][i] = np.pad(
-                batch["spikePow"][i],
-                ((_start, _end), (0, 0)),
+            start_pad = np.random.normal(loc=0, scale=0.1, size=(_start, 256)).astype(
+                "float32"
+            )
+
+            spikePow = np.vstack([start_pad, spikePow])
+
+            spikePow = np.pad(
+                spikePow,
+                ((0, _end), (0, 0)),
                 # mode="edge"
                 constant_values=0,
             )
-            batch["spikePow_mask"][i] = np.pad(
-                batch["spikePow_mask"][i], (_start, _end), constant_values=0
+            spikePow_mask = np.pad(
+                spikePow_mask, (_start, _end), constant_values=0
             )
 
             batch["spikePow_lens"][i] + _start
+            batch["spikePow"][i] = spikePow
+            batch["spikePow_mask"][i] = spikePow_mask
 
         batch["spikePow"] = np.array(batch["spikePow"])
         batch["spikePow_mask"] = np.array(batch["spikePow_mask"])
@@ -488,8 +456,8 @@ class B2T_DataModule(L.LightningDataModule):
                 debugging=self.debugging,
                 add_noises=True,
                 word_level=self.config.word_level,
-                has_label=True,
-                use_people_speech=self.config.use_people_speech,
+                has_label=self.config.add_noises,
+                use_addtional_corpus=self.config.use_addtional_corpus,
             )
         else:
             self.train_dataset = None

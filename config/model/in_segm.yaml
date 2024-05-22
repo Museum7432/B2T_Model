@@ -2,7 +2,7 @@
 
 input_dims: 256
 
-# use_people_speech: true
+# use_addtional_corpus: true
 
 max_epochs: 10
 word_level: false
@@ -49,7 +49,7 @@ decoders_layers:
 
 
 optimizer:
-  warmup_perc: 0.2 # lr warmup for the first 10% of the training
+  warmup_perc: 0.1 # lr warmup for the first 10% of the training
   peak_lr: 1e-4
   last_lr: 1e-6
   beta_1: 0.9

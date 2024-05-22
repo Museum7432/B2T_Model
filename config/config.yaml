@@ -23,7 +23,8 @@ data_module:
   num_workers: 4
   # debugging: true
   word_level: false
-  use_people_speech: false
+  use_addtional_corpus: false
+  add_noises: true
 
 
 seed: 49
