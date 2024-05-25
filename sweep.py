@@ -9,7 +9,7 @@ sweep_configuration = {
     "parameters": {
         "conv_size": {"values": [512, 768, 1024, 2048]},
         "hidden_size": {"values": [512, 768, 1024, 1536, 2048]},
-        "encoder_n_layer": {"values": [6, 8, 12, 14, 16]},
+        "encoder_n_layer": {"values": [6, 8, 12, 14, 16, 20, 24, 26, 28, 30]},
         "decoder_n_layer": {"values": [4, 6, 8, 10, 12]},
         "lr": {"max": 0.1, "min": 2e-5},
         "update_probs": {"max": 0.95, "min": 0.5},
