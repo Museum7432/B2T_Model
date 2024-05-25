@@ -66,16 +66,22 @@ class dataset(Dataset):
         self,
         data_dir,
         debugging=False,
+        has_label=True,
         add_noises=False,
         word_level=False,
-        has_label=True,
         use_addtional_corpus=False,
+        sp_noise_std=None,
+        gaussian_filter_sigma=0.8,
     ):
         self.debugging = debugging
         self.add_noises = add_noises
         self.word_level = word_level
         self.has_label = has_label
         self.use_addtional_corpus = use_addtional_corpus
+
+        self.gaussian_filter_sigma = gaussian_filter_sigma
+
+        self.sp_noise_std = sp_noise_std
 
         if data_dir is None:
             return
@@ -204,9 +210,7 @@ class dataset(Dataset):
 
         spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
 
-        ############################
-        # noise = 0
-        if self.add_noises:
+        if self.sp_noise_std is not None and self.sp_noise_std != 0:
             # noise_std = np.random.rand() * 0.25
             # noise = np.random.normal(
             #     loc=1, scale=noise_std, size=spikePow.shape
@@ -214,11 +218,9 @@ class dataset(Dataset):
             # spikePow = spikePow * noise
 
             noise = np.random.normal(
-                loc=1, scale=0.1, size=spikePow.shape
+                loc=1, scale=self.sp_noise_std, size=spikePow.shape
             ).astype("float32")
             spikePow = spikePow * noise
-
-        ############################
 
         # block normalization
         spikePow = (spikePow - block_mean) / block_std
@@ -227,18 +229,12 @@ class dataset(Dataset):
         sigma = 0.8
         # if self.add_noises:
         #     sigma = np.random.normal(loc=sigma, scale=0.1)
-        spikePow = scipy.ndimage.gaussian_filter1d(spikePow, sigma, axis=0)
+
+        if self.gaussian_filter_sigma is not None and self.gaussian_filter_sigma != 0:
+            spikePow = scipy.ndimage.gaussian_filter1d(
+                spikePow, self.gaussian_filter_sigma, axis=0
+            )
         # spikePow = scipy.signal.savgol_filter(spikePow, 20, 2, axis=0)
-
-        # if self.add_noises:
-        #     noise_ratio = np.random.rand()/80
-        #     n_std = 1 * noise_ratio
-
-        #     noise = np.random.normal(loc=0, scale=n_std, size=spikePow.shape).astype(
-        #         "float32"
-        #     )
-
-        #     spikePow = spikePow + noise
 
         # if self.add_noises and np.random.rand() < 0.15:
         #     spikePow, sentenceText, phonemizedText = flip_(spikePow, sentenceText, phonemizedText)
@@ -258,13 +254,13 @@ class dataset(Dataset):
             spikePow, spikePow_mask, sentenceText, phonemizedText = self.mask_word(
                 idx, spikePow, spikePow_mask, sentenceText, phonemizedText
             )
-        
+
         # if self.add_noises and np.random.rand() < 0.25:
         #     # blank out quater of the input channels randomly
         #     _start = np.random.randint(3) * 64
         #     _end = _start + 64
         #     spikePow[:, _start:_end] = 0
-    
+
         # shift spikePow randomly
         if self.add_noises:
             _start = np.random.randint(8)
@@ -384,7 +380,6 @@ def collate_fn_factory(add_noises=False):
         batch["spikePow"] = np.expand_dims(np.concatenate(batch["spikePow"]), axis=0)
         batch["spikePow_mask"] = np.concatenate(batch["spikePow_mask"])
 
-
         for f in tensor_fields:
             if f in batch.keys():
                 batch[f] = torch.tensor(batch[f])
@@ -395,77 +390,100 @@ def collate_fn_factory(add_noises=False):
 
 
 class B2T_DataModule(L.LightningDataModule):
-    def __init__(self, config):
+    def __init__(
+        self,
+        add_noises=False,
+        train_data_dir="./dataset/train",
+        val_data_dir="./dataset/valid",
+        test_data_dir="./dataset/test",
+        word_level=False,
+        use_addtional_corpus=False,
+        sp_noise_std=0.2,
+        gaussian_filter_sigma=0.8,
+        debugging=False,
+        train_batch_size=4,
+        valid_batch_size=4,
+        num_workers=4,
+        **other_args
+    ):
         super().__init__()
-        self.config = config
 
-        if self.config.get("debugging"):
-            self.debugging = self.config.debugging
-            print("debugging mode")
-        else:
-            self.debugging = False
+        self.train_data_dir = train_data_dir
+        self.val_data_dir = val_data_dir
+        self.test_data_dir = test_data_dir
+
+        self.word_level = word_level
+
+        self.sp_noise_std = sp_noise_std
+        self.gaussian_filter_sigma = gaussian_filter_sigma
+        self.debugging = debugging
+
+        self.train_batch_size = train_batch_size
+        self.valid_batch_size = valid_batch_size
+        self.num_workers = num_workers
+
+        self.use_addtional_corpus = use_addtional_corpus
+
+        self.add_noises=add_noises
 
     def setup(self, stage: str):
 
-        if self.config.train_data_dir is not None:
-            self.train_dataset = dataset(
-                data_dir=self.config.train_data_dir,
-                debugging=self.debugging,
-                add_noises=True,
-                word_level=self.config.word_level,
-                has_label=self.config.add_noises,
-                use_addtional_corpus=self.config.use_addtional_corpus,
-            )
-        else:
-            self.train_dataset = None
+        self.train_dataset = dataset(
+            data_dir=self.train_data_dir,
+            debugging=self.debugging,
+            sp_noise_std=self.sp_noise_std,
+            word_level=self.word_level,
+            add_noises=self.add_noises,
+            has_label=True,
+            use_addtional_corpus=self.use_addtional_corpus,
+            gaussian_filter_sigma=self.gaussian_filter_sigma,
+        )
 
-        if self.config.val_data_dir is not None:
-            self.val_dataset = dataset(
-                data_dir=self.config.val_data_dir,
-                has_label=True,
-                debugging=self.debugging,
-                word_level=False,
-                add_noises=False,
-            )
-        else:
-            self.val_dataset = None
+        self.val_dataset = dataset(
+            data_dir=self.val_data_dir,
+            has_label=True,
+            debugging=self.debugging,
+            word_level=False,
+            add_noises=False,
+            sp_noise_std=None,
+            gaussian_filter_sigma=self.gaussian_filter_sigma,
+        )
 
-        if self.config.test_data_dir is not None:
-            self.test_dataset = dataset(
-                data_dir=self.config.test_data_dir,
-                has_label=False,
-                debugging=self.debugging,
-                word_level=False,
-                add_noises=False,
-            )
-        else:
-            self.test_dataset = None
+        self.test_dataset = dataset(
+            data_dir=self.test_data_dir,
+            has_label=False,
+            debugging=self.debugging,
+            word_level=False,
+            add_noises=False,
+            sp_noise_std=None,
+            gaussian_filter_sigma=self.gaussian_filter_sigma,
+        )
 
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
-            batch_size=self.config.train_batch_size,
+            batch_size=self.train_batch_size,
             collate_fn=collate_fn_factory(add_noises=True),
             pin_memory=True,
             shuffle=True,
-            num_workers=self.config.num_workers,
+            num_workers=self.num_workers,
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.val_dataset,
-            batch_size=self.config.valid_batch_size,
+            batch_size=self.valid_batch_size,
             collate_fn=collate_fn_factory(),
             pin_memory=True,
             shuffle=False,
-            num_workers=self.config.num_workers,
+            num_workers=self.num_workers,
         )
 
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
-            batch_size=self.config.valid_batch_size,
+            batch_size=self.valid_batch_size,
             collate_fn=collate_fn_factory(),
             shuffle=False,
-            num_workers=self.config.num_workers,
+            num_workers=self.num_workers,
         )

@@ -14,58 +14,6 @@ from src.utils import (
     correct_channels,
 )
 
-# def fill_nan_1d(arr):
-#     mask = np.isnan(arr)
-#     idx = np.where(~mask, np.arange(mask.shape[0]), 0)
-#     np.maximum.accumulate(idx, out=idx)
-#     out = arr[idx]
-#     return out
-
-
-# def filter_noises_per_channel(spikePow_channel):
-#     # spikePow_channel = 1/(spikePow_channel + 1)
-
-#     _mean = np.median(spikePow_channel)
-#     # _std = np.std(spikePow_channel)
-#     _std = np.median(np.abs(spikePow_channel - _mean))
-
-#     probs = norm.pdf(spikePow_channel, _mean, _std)
-
-#     # thres = np.percentile(probs, 1)
-#     # thres = max(thres, 1e-10)
-#     # thres = min(thres, 1e-10)
-
-#     thres = 1e-8
-#     outliers = probs < thres
-
-#     # outliers = spikePow_channel > _mean + 4 * _std
-#     # outliers[spikePow_channel < _mean - 4 * _std] = True
-
-#     temp = np.where(outliers, _mean, spikePow_channel)
-
-#     low = temp.min()
-#     high = temp.max()
-#     spikePow_channel = np.clip(spikePow_channel, low, high)
-
-#     # spikePow_channel[outliers] = _mean
-
-#     # spikePow_channel[outliers] = np.NaN
-#     # if np.isnan(spikePow_channel[0]):
-#     #     spikePow_channel[0] = _mean
-#     # spikePow_channel = fill_nan_1d(spikePow_channel)
-
-#     # high = _mean + 2.5*_std
-#     # low = _mean - 2.5*_std
-#     # spikePow_channel = np.clip(spikePow_channel, low, high)
-
-#     return spikePow_channel
-
-
-# def filter_noises(spikePow):
-#     for c in range(len(spikePow[0])):
-#         spikePow[:, c] = filter_noises_per_channel(spikePow[:, c])
-#     return spikePow
-
 
 def get_bound(_mean, _std, ep=1e-8):
     part1 = np.sqrt(-np.log(ep * _std * np.pi) * 2)
@@ -161,10 +109,7 @@ def load_file(path, has_labels=True):
         _mean = np.median(features, axis=0)
         _std = np.median(np.abs(features - _mean), axis=0)
 
-        # features = filter_noises(features, _mean, _std)
-
-        # _mean = features.mean(0)
-        # _std = features.std(0)
+        features = filter_noises(features, _mean, _std, ep=1e-8)
 
         block_mean_std = np.vstack([_mean, _std])
 

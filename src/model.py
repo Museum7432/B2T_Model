@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 
 from .utils import phonetic_decode, decode, vocab, phoneme_vocab
 import numpy as np
-
+import os
 
 from .modules.mamba_cu_seqlens import mamba_block, mamba_block_for_input_ids, unpack
 
@@ -34,7 +34,7 @@ class modules_stack(L.LightningModule):
         super(modules_stack, self).__init__()
         # layers example
         # [
-        #   ["mamba", 256, 2, True],  # input_channels, n_layer, bidirectional
+        #   ["mamba", 256, 2, True, 0.7],  # input_channels, n_layer, bidirectional, update_probs
         #   ["concat", 256, 512, 2],  # input_dims, output_dims, group_size
         #   ["pooling", "max", 2],  # pooling_type, group_size
         #   ["conv", 256, 512, 2]
@@ -46,12 +46,13 @@ class modules_stack(L.LightningModule):
 
         for l in layers:
             if l[0] == "mamba":
-                _, in_channels, n_layer, bidirectional = l
+                _, in_channels, n_layer, bidirectional, update_probs = l
                 modules_list.append(
                     mamba_block(
                         d_model=in_channels,
                         n_layer=n_layer,
                         bidirectional=bidirectional,
+                        update_probs=update_probs,
                     )
                 )
                 self.output_dims = in_channels
@@ -114,90 +115,17 @@ class modules_stack(L.LightningModule):
         return hidden_states, spikePow_lens
 
 
-class BaseModel(L.LightningModule):
-    def num_steps(self) -> int:
-        """Get number of steps"""
-        # Accessing _data_source is flaky and might break
-        dataset = self.trainer.fit_loop._data_source.dataloader()
-        dataset_size = len(dataset)
-        num_devices = max(1, self.trainer.num_devices)
-        num_steps = (
-            dataset_size
-            * self.trainer.max_epochs
-            // (self.trainer.accumulate_grad_batches * num_devices)
-        )
-        return num_steps
-
-    def configure_optimizers(self):
-
-        if self.trainer.max_epochs == -1:
-            self.optimizer = torch.optim.AdamW(
-                self.parameters(), lr=self.config.optimizer.peak_lr
-            )
-
-            return self.optimizer
-
-        betas = (self.config.optimizer.beta_1, self.config.optimizer.beta_2)
-
-        self.optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.config.optimizer.peak_lr,
-            weight_decay=self.config.optimizer.weight_decay,
-            betas=betas,
-            eps=self.config.optimizer.eps,
-        )
-
-        # num_steps = self.num_steps()
-        # self.lr_scheduler = get_linear_schedule_with_warmup(
-        #     self.optimizer,
-        #     num_warmup_steps=int(num_steps * self.config.optimizer.warmup_perc),
-        #     num_training_steps=num_steps,
-        # )
-        # return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]
-
-        def get_scheduler(
-            optimizer, num_training_steps, warmup_steps, peak_lr, last_lr
-        ):
-
-            def lr_lambda(current_step):
-                if current_step < warmup_steps:
-                    return current_step / warmup_steps
-                progress = (current_step - warmup_steps) / (
-                    num_training_steps - warmup_steps
-                )
-                cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
-                lr = last_lr + (peak_lr - last_lr) * cosine_decay
-                return lr / peak_lr
-
-            return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-        num_steps = self.num_steps()
-
-        self.scheduler = get_scheduler(
-            self.optimizer,
-            num_steps,
-            int(num_steps * self.config.optimizer.warmup_perc),
-            self.config.optimizer.peak_lr,
-            self.config.optimizer.last_lr,
-        )
-
-        lr_scheduler = {
-            "scheduler": self.scheduler,
-            "name": "custom_scheduler",
-            "interval": "step",  # Ensure learning rate updates per step
-            "frequency": 1,  # Optional: If you want to make sure it updates every step
-        }
-
-        return [self.optimizer], [lr_scheduler]
-
-
 class CTC_decoder(L.LightningModule):
-    def __init__(self, layers_config, phoneme_rec=False):
+    def __init__(self, input_dims=512, n_layer=5, phoneme_rec=False, update_probs=0.7):
         super(CTC_decoder, self).__init__()
         self.phoneme_rec = phoneme_rec
-        self.layers_config = layers_config
+        self.input_dims = input_dims
 
-        self.layers = modules_stack(layers_config)
+        self.update_probs = update_probs
+
+        self.layers = [["mamba", input_dims, n_layer, True, update_probs], ["unpack"]]
+
+        self.encoder = modules_stack(self.layers)
 
         if phoneme_rec:
             # remove the eos token
@@ -205,15 +133,19 @@ class CTC_decoder(L.LightningModule):
         else:
             self.vocab_size = len(vocab) - 1
 
-        self.linear = nn.Linear(self.layers.output_dims, self.vocab_size)
+        self.linear = nn.Linear(input_dims, self.vocab_size)
 
     def forward(self, hidden_states, input_lens):
 
-        hidden_states, output_lens = self.layers(hidden_states, input_lens)
+        hidden_states, output_lens = self.encoder(hidden_states, input_lens)
 
-        hidden_states = self.linear(hidden_states)
+        lm_logits = self.linear(hidden_states)
 
-        return hidden_states.log_softmax(-1), output_lens
+        return {
+            "logits": lm_logits.log_softmax(-1),
+            "output_lens": output_lens,
+            "hidden_states": hidden_states,
+        }
 
     def disable_grad(self):
         self.orig_requires_grads = [p.requires_grad for p in self.parameters()]
@@ -226,7 +158,7 @@ class CTC_decoder(L.LightningModule):
             p.requires_grad = rg
 
     def calc_loss(self, hidden_states, input_lens, batch):
-        logits, output_lens = self(hidden_states=hidden_states, input_lens=input_lens)
+        output = self(hidden_states=hidden_states, input_lens=input_lens)
 
         if self.phoneme_rec:
             labels = batch["phonemize_ids"]
@@ -239,14 +171,14 @@ class CTC_decoder(L.LightningModule):
         label_lens -= 1
 
         loss = F.ctc_loss(
-            logits.transpose(0, 1),
+            output["logits"].transpose(0, 1),
             labels,
-            output_lens,
+            output["output_lens"],
             label_lens,
             zero_infinity=True,
         )
 
-        return loss, logits, output_lens
+        return {"loss": loss, "logits": output["logits"], "output_lens": output["output_lens"]}
 
     def batch_decode(self, ids, output_lens=None, raw_ouput=False):
 
@@ -282,247 +214,100 @@ class CTC_decoder(L.LightningModule):
         return label
 
 
-from transformers.models.t5.configuration_t5 import T5Config
-from transformers.models.t5.modeling_t5 import (
-    T5Stack,
-    T5ForConditionalGeneration,
-    T5PreTrainedModel,
-)
+class feature_extractor(L.LightningModule):
+    def __init__(self, output_dims=512, conv_size=1024):
+        super(feature_extractor, self).__init__()
 
+        self.output_dims = output_dims
 
-def get_t5_config(input_dims, num_decoder_layers, vocab_size, eos_token_id):
-    base_config = T5Config.from_pretrained("google-t5/t5-base")
-    base_config.d_model = input_dims
-    base_config.num_layers = 0
-    base_config.num_decoder_layers = num_decoder_layers
-    base_config.vocab_size = vocab_size
-
-    base_config.decoder_start_token_id = 0
-
-    base_config.pad_token_id = 1
-
-    base_config.eos_token_id = eos_token_id
-
-    return base_config
-
-
-class decoder(L.LightningModule):
-    def __init__(self, layers_config, phoneme_rec=False):
-        super(decoder, self).__init__()
-        self.phoneme_rec = phoneme_rec
-
-        # the last layer is the decoder
-        self.layers_config = layers_config[:-1]
-
-        if phoneme_rec:
-            self.vocab_size = len(phoneme_vocab)
-        else:
-            self.vocab_size = len(vocab)
-
-        self.eos_token_id = self.vocab_size - 1
-
-        self.layers = modules_stack(self.layers_config)
-
-        _, input_size, num_layers = layers_config[-1]
-
-        t5_config = get_t5_config(
-            input_dims=input_size,
-            num_decoder_layers=num_layers,
-            vocab_size=self.vocab_size,
-            eos_token_id=self.eos_token_id,
-        )
-        self.t5_model = T5ForConditionalGeneration(t5_config)
-
-    def disable_grad(self):
-        self.orig_requires_grads = [p.requires_grad for p in self.parameters()]
-
-        for p in self.parameters():
-            p.requires_grad = False
-
-    def enable_grad(self):
-        for p, rg in zip(self.parameters(), self.orig_requires_grads):
-            p.requires_grad = rg
-
-    def forward(self, hidden_states, input_lens, labels=None):
-        hidden_states, output_lens = self.layers(hidden_states, input_lens)
-
-        batch_size, seq_len, hidden_size = hidden_states.shape
-
-        attention_mask = torch.arange(
-            seq_len, device=self.device
-        ) < output_lens.unsqueeze(1)
-
-        if labels is not None:
-            return self.t5_model(
-                inputs_embeds=hidden_states,
-                attention_mask=attention_mask,
-                labels=labels,
-            )
-
-        logits = self.t5_model.generate(
-            inputs_embeds=hidden_states,
-            attention_mask=attention_mask,
-            max_new_tokens=150,
-            output_logits=True,
-            return_dict_in_generate=True,
-        ).logits
-
-        batch_size, vocab_size = logits[0].shape
-
-        logits = torch.vstack(logits)
-
-        logits = logits.reshape(-1, batch_size, vocab_size).transpose(0, 1)
-
-        return logits, None
-
-    def calc_loss(self, hidden_states, input_lens, batch):
-        if self.phoneme_rec:
-            labels = batch["phonemize_ids"]
-        else:
-            labels = batch["sent_ids"]
-
-        out = self(hidden_states=hidden_states, input_lens=input_lens, labels=labels)
-        loss = out.loss
-        logits = out.logits
-
-        batch_size, seq_len, vocab_size = logits.shape
-
-        return loss, logits, None
-
-    def batch_decode(self, ids, output_lens=None, raw_ouput=False):
-
-        if self.phoneme_rec:
-            dec = phonetic_decode
-        else:
-            dec = decode
-
-        texts = [dec(s) for s in ids]
-
-        if raw_ouput:
-            return texts
-
-        for i in range(len(texts)):
-            if "_" in texts[i]:
-                texts[i] = texts[: texts.index("_")]
-
-        texts = [s.replace("|", " ").replace("-", "").replace("_", "") for s in texts]
-
-        return texts
-
-    def get_target_text(self, batch):
-
-        if self.phoneme_rec:
-            label = batch["phonemized"]
-        else:
-            label = batch["sent"]
-
-        label = [s.replace("|", " ").replace("-", "").replace("+", "") for s in label]
-
-        return label
-
-
-def get_decoder(decoder_type, layers_config):
-    if "phonetic" in decoder_type:
-        phoneme_rec = True
-    elif "alphabet" in decoder_type:
-        phoneme_rec = False
-    else:
-        raise ValueError(f"unknown decoder type: {decoder_type}")
-
-    if "ctc" in decoder_type:
-        use_ctc = True
-    elif "decoder" in decoder_type:
-        use_ctc = False
-    else:
-        raise ValueError(f"unknown decoder type: {decoder_type}")
-
-    if use_ctc:
-        dec = CTC_decoder(layers_config, phoneme_rec=phoneme_rec)
-    else:
-        dec = decoder(layers_config, phoneme_rec=phoneme_rec)
-
-    return dec
-
-
-class joint_Model(BaseModel):
-    def __init__(
-        self, config: DictConfig, decoders_conf=None, use_addtional_corpus=None
-    ):
-        # decoder_conf: if not none, only load those layers
-        super(joint_Model, self).__init__()
-        self.save_hyperparameters()
-
-        self.config = config
-
-        if use_addtional_corpus is None:
-            if config.get("use_addtional_corpus"):
-                self.use_addtional_corpus = config.use_addtional_corpus
-            else:
-                self.use_addtional_corpus = False
-        else:
-            self.use_addtional_corpus = use_addtional_corpus
-
-        self.word_level = config.get("word_level")
-
-        self.encoder = modules_stack(config.encoder.layers)
-
-        dec_conf = config.decoders_conf
-
-        if decoders_conf is not None:
-            dec_conf = [i for i in dec_conf if i[0] in decoders_conf]
-
-        assert len(dec_conf) > 0
-
-        decoder_loss_weights = []
-        modules = {}
-
-        for dec_name, dec_type, loss_weights in dec_conf:
-            decoder_loss_weights.append(loss_weights)
-
-            decoder_layers_config = config.decoders_layers[dec_name]
-
-            modules[dec_name] = get_decoder(dec_type, decoder_layers_config)
-
-        # normalize loss_weights
-        decoder_loss_weights = [
-            i / sum(decoder_loss_weights) for i in decoder_loss_weights
+        self.layers = [
+            ["unpack"],
+            ["conv", 256, conv_size, 7, 2, 256],
+            ["highway", conv_size, 2],
+            ["conv", conv_size, output_dims, 3, 2, 1],
+            ["highway", output_dims, 2],
+            ["pack"],
         ]
 
-        self.decoder_loss_weights = decoder_loss_weights
+        self.extractor = modules_stack(self.layers)
 
-        self.decoders = nn.ModuleDict(modules)
+    def forward(self, spikePow, spikePow_lens):
+        hidden_states, output_lens = self.extractor(spikePow, spikePow_lens)
 
-        if self.use_addtional_corpus:
-            self.text2prep_encoder = mamba_block_for_input_ids(
-                d_model=self.encoder.output_dims,
-                n_layer=5,
-                bidirectional=True,
-                vocab_size=len(phoneme_vocab) - 1,
+        return hidden_states, output_lens
+
+
+class B2T_Model(L.LightningModule):
+    def __init__(
+        self,
+        conv_size=1024,
+        hidden_size=512,
+        encoder_n_layer=5,
+        decoder_n_layer=5,
+        decoders=[
+            "al",
+            "ph",
+        ],  # use the alphabet or phonemes, should be both at training
+        update_probs=0.5,
+        al_loss_weight=0.5,
+        peak_lr=1e-4,
+        last_lr=1e-6,
+        beta_1=0.9,
+        beta_2=0.95,
+        weight_decay=0.1,
+        eps=1e-08,
+        lr_warmup_perc=0.1,  # lr warmup for the first 10% of the training
+        **other_args
+    ):
+        super(B2T_Model, self).__init__()
+        # self.save_hyperparameters()
+
+        self.peak_lr = peak_lr
+        self.last_lr = last_lr
+        self.beta_1 = beta_1
+        self.beta_2 = beta_2
+        self.weight_decay = weight_decay
+        self.eps = eps
+        self.lr_warmup_perc = lr_warmup_perc
+
+        self.update_probs = update_probs
+
+        self.feature_extractor = feature_extractor(
+            output_dims=hidden_size, conv_size=conv_size
+        )
+
+        self.encoder = modules_stack(
+            [["mamba", hidden_size, encoder_n_layer, True, update_probs]]
+        )
+
+        dec = {}
+        loss_weights = {}
+
+        for d in decoders:
+            dec[d] = CTC_decoder(
+                input_dims=hidden_size,
+                n_layer=decoder_n_layer,
+                phoneme_rec=d == "ph",
+                update_probs=update_probs,
             )
+            loss_weights[d] = al_loss_weight if d == "al" else 1 - al_loss_weight
 
-        if self.word_level:
-            # 0: input and padding
-            # 1: mask
-            self.mask_tokens = nn.Embedding(
-                num_embeddings=2, embedding_dim=256, padding_idx=0
-            )
+        self.decoders = nn.ModuleDict(dec)
+
+        self.loss_weights = loss_weights
 
     def forward(self, spikePow, spikePow_mask, spikePow_lens, encoder_only=False):
-        # spikePow (1, packed_input_len, input_channels)
-        if self.word_level:
-            mask_embeddings = self.mask_tokens(spikePow_mask)
-            spikePow[0, spikePow_mask != 0, :] = 0
-            spikePow = spikePow + mask_embeddings
+        
+        hidden_states, output_lens = self.feature_extractor(spikePow, spikePow_lens)
 
-        hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
+        hidden_states, output_lens = self.encoder(hidden_states, output_lens)
 
         if encoder_only:
             return hidden_states, output_lens
 
-        outputs = {}
         for k, d in self.decoders.items():
-            # (logits, output_lens)
             outputs[k] = d(hidden_states, output_lens)
+
         return outputs
 
     def calc_loss(self, batch):
@@ -534,116 +319,95 @@ class joint_Model(BaseModel):
             encoder_only=True,
         )
 
+        items = {}
+
         losses = []
         logits = []
         out_lens = []
 
         for k, d in self.decoders.items():
-            l, lg, lens = d.calc_loss(hidden_states, output_lens, batch)
+            # loss, logits, output_lens
+            items[k] = d.calc_loss(hidden_states, output_lens, batch)
 
-            losses.append(l)
-            out_lens.append(lens)
-            logits.append(lg.detach())
-
-        return losses, logits, out_lens
-
-    def calc_additional_corpus_loss(self, batch):
-        ps_hidden_states, ps_output_lens = self.text2prep_encoder(
-            input_ids=batch["ps_input_ids"], input_lens=batch["ps_input_ids_lens"]
-        )
-
-        self.decoders["ctc_al1"].disable_grad()
-        # force the text2rep model to learn the latent space
-        # prepresentation of the encoder
-        loss1, _, _ = self.decoders["ctc_al1"].calc_loss(
-            ps_hidden_states,
-            ps_output_lens,
-            {
-                "sent_ids": batch["ps_label"],
-                "sent_ids_len": batch["ps_label_lens"],
-            },
-        )
-        self.decoders["ctc_al1"].enable_grad()
-
-        self.log(f"al1_addi_l", add_loss.detach(), batch_size=len(batch["spikePow"]))
-
-        loss, _, _ = self.decoders["ctc_al"].calc_loss(
-            ps_hidden_states.detach(),
-            ps_output_lens,
-            {
-                "sent_ids": batch["ps_label"],
-                "sent_ids_len": batch["ps_label_lens"],
-            },
-        )
-        self.log(f"al_addi_l", loss.detach(), batch_size=len(batch["spikePow"]))
-
-        return (loss1 + loss) / 2
+        return items
 
     def training_step(self, batch):
-        losses, logits, output_lens = self.calc_loss(batch)
+        items = self.calc_loss(batch)
 
         loss = 0
-        for l, w in zip(losses, self.decoder_loss_weights):
-            loss += l * w
+        for k, output in items.items():
+            loss += output["loss"] * self.loss_weights[k]
+
+            self.log(
+                f"train_{k}_loss",
+                output["loss"].detach(),
+                batch_size=len(batch["spikePow"]),
+            )
 
         self.log("train_loss", loss.detach(), prog_bar=True)
 
-        if self.use_addtional_corpus:
+        # if self.use_addtional_corpus:
 
-            add_loss = self.calc_additional_corpus_loss(batch)
+        #     add_loss = self.calc_additional_corpus_loss(batch)
 
-            loss += add_loss * 0.1
-
-        for k, l in zip(self.decoders.keys(), losses):
-            self.log(f"train_{k}_loss", l.detach(), batch_size=len(batch["spikePow"]))
+        #     loss += add_loss * 0.1
 
         return loss
 
     def on_validation_epoch_start(self):
+        logdir = self.trainer.log_dir
         for k in self.decoders.keys():
             # erase the file
-            open(f"valid_{k}.txt", "w").close()
+            open(os.path.join(logdir, f"valid_{k}.txt"), "w").close()
 
     def validation_step(self, batch):
-        losses, logits, output_lens = self.calc_loss(batch)
+        logdir = self.trainer.log_dir
 
-        for k, l in zip(self.decoders.keys(), losses):
-            self.log(f"val_{k}_loss", l, batch_size=len(batch["spikePow"]))
+        items = self.calc_loss(batch)
 
         loss = 0
-        for l, w in zip(losses, self.decoder_loss_weights):
-            loss += l * w
+        for k, output in items.items():
+            loss += output["loss"] * self.loss_weights[k]
+
+            self.log(
+                f"val_{k}_loss",
+                output["loss"].detach(),
+                batch_size=len(batch["spikePow"]),
+            )
 
         self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
 
-        for k, l, ol in zip(self.decoders.keys(), logits, output_lens):
-            if ol is not None:
-                ol = ol.cpu().tolist()
+        for k, output in items.items():
+
+            output_lens = output["output_lens"].cpu().tolist()
+
             # greedy decode
-            ids = l.argmax(dim=-1).cpu().tolist()
+            ids = output["logits"].argmax(dim=-1).cpu().tolist()
 
             text = []
             raw_text = []
 
-            text = self.decoders[k].batch_decode(ids, output_lens=ol)
+            text = self.decoders[k].batch_decode(ids, output_lens=output_lens)
 
             raw_text = self.decoders[k].batch_decode(
-                ids, output_lens=ol, raw_ouput=True
+                ids, output_lens=output_lens, raw_ouput=True
             )
 
             target = self.decoders[k].get_target_text(batch)
 
-            with open(f"valid_{k}.txt", "a") as txt_file:
+            with open(os.path.join(logdir, f"valid_{k}.txt"), "a") as txt_file:
                 for i in range(len(text)):
                     txt_file.write(f"{raw_text[i]}\n{text[i]}\n{target[i]}\n\n")
 
     def on_validation_epoch_end(self):
+        logdir = self.trainer.log_dir
+
         total_wer = 0
 
         for k in self.decoders.keys():
             preds = []
             target = []
-            with open(f"valid_{k}.txt", "r") as fp:
+            with open(os.path.join(logdir, f"valid_{k}.txt"), "r") as fp:
                 # 0 raw_text
                 # 1 text
                 # 2 target
@@ -660,42 +424,79 @@ class joint_Model(BaseModel):
 
             self.log(f"wer_{k}", wer)
 
+
         total_wer = total_wer / len(self.decoders)
 
         self.log("wer", total_wer, prog_bar=True)
 
-    def on_test_epoch_start(self):
-        for k in self.decoders.keys():
-            # erase the file
-            open(f"test_{k}.txt", "w").close()
-            open(f"test_raw_{k}.txt", "w").close()
+    def num_steps(self) -> int:
+        """Get number of steps"""
+        # Accessing _data_source is flaky and might break
+        dataset = self.trainer.fit_loop._data_source.dataloader()
+        dataset_size = len(dataset)
+        num_devices = max(1, self.trainer.num_devices)
+        num_steps = (
+            dataset_size
+            * self.trainer.max_epochs
+            // (self.trainer.accumulate_grad_batches * num_devices)
+        )
+        return num_steps
 
-    def test_step(self, batch):
-        outputs = self(
-            spikePow=batch["spikePow"],
-            spikePow_mask=batch["spikePow_mask"],
-            spikePow_lens=batch["spikePow_lens"],
+    def configure_optimizers(self):
+        if self.trainer.max_epochs == -1:
+            self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.peak_lr)
+
+            return self.optimizer
+
+        betas = (self.beta_1, self.beta_2)
+
+        self.optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.peak_lr,
+            weight_decay=self.weight_decay,
+            betas=betas,
+            eps=self.eps,
         )
 
-        for k in self.decoders.keys():
+        # num_steps = self.num_steps()
+        # self.lr_scheduler = get_linear_schedule_with_warmup(
+        #     self.optimizer,
+        #     num_warmup_steps=int(num_steps * self.config.optimizer.warmup_perc),
+        #     num_training_steps=num_steps,
+        # )
+        # return [self.optimizer], [{"scheduler": self.lr_scheduler, "interval": "step"}]
 
-            logits, output_lens = outputs[k]
+        def get_scheduler(
+            optimizer, num_training_steps, warmup_steps, peak_lr, last_lr
+        ):
 
-            ids = logits.argmax(dim=-1).cpu().tolist()
+            def lr_lambda(current_step):
+                if current_step < warmup_steps:
+                    return current_step / warmup_steps
+                progress = (current_step - warmup_steps) / (
+                    num_training_steps - warmup_steps
+                )
+                cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+                lr = last_lr + (peak_lr - last_lr) * cosine_decay
+                return lr / peak_lr
 
-            text = []
-            raw_text = []
+            return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-            text = self.decoders[k].batch_decode(ids, output_lens=output_lens)
+        num_steps = self.num_steps()
 
-            raw_text = self.decoders[k].batch_decode(
-                ids, output_lens=output_lens, raw_ouput=True
-            )
+        self.scheduler = get_scheduler(
+            self.optimizer,
+            num_steps,
+            int(num_steps * self.lr_warmup_perc),
+            self.peak_lr,
+            self.last_lr,
+        )
 
-            with open(f"test_{k}.txt", "a") as txt_file:
-                for i in range(len(text)):
-                    txt_file.write(f"{text[i]}\n")
+        lr_scheduler = {
+            "scheduler": self.scheduler,
+            "name": "custom_scheduler",
+            "interval": "step",  # Ensure learning rate updates per step
+            "frequency": 1,  # Optional: If you want to make sure it updates every step
+        }
 
-            with open(f"test_raw_{k}.txt", "a") as txt_file:
-                for i in range(len(raw_text)):
-                    txt_file.write(f"{raw_text[i]}\n")
+        return [self.optimizer], [lr_scheduler]

@@ -5,3 +5,7 @@ lightning_logs
 outputs
 config/*/local*
 !src/
+wandb
+sweep
+valid_al.txt
+valid_ph.txt

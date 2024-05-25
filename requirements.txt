@@ -10,7 +10,8 @@ transformers
 wandb
 tensorboard
 einops
-hydra-core
+# hydra-core
+jsonargparse
 phonemizer
 local-attention
 causal-conv1d>=1.2.0

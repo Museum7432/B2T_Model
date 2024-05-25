@@ -25,7 +25,7 @@ class conv_block(nn.Module):
             kernel_size=kernel_size,
             stride=stride,
             padding=self.pad,
-            padding_mode="replicate",
+            # padding_mode="replicate",
             groups=groups,
             bias=False
         )

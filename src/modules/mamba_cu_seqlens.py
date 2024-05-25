@@ -17,6 +17,7 @@ class MambaConfig:
     fused_add_norm: bool = True
     bidirectional: bool = False
     bidirectional_strategy: Union[str, None] = None
+    update_probs: float = 0.5
 
 
 import math
@@ -345,12 +346,15 @@ class MixerModel(nn.Module):
         residual_in_fp32=False,
         bidirectional: bool = False,
         bidirectional_strategy: Optional[str] = None,
+        update_probs=0.5,
         device=None,
         dtype=None,
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.residual_in_fp32 = residual_in_fp32
+
+        self.update_probs=update_probs
 
         # We change the order of residual and layer norm:
         # Instead of LN -> Attn / MLP -> Add, we do:
@@ -411,7 +415,7 @@ class MixerModel(nn.Module):
                 inference_params=inference_params,
             )
             hidden_states, mask = stochastic_update(
-                new_state=n_hidden_states, old_state=hidden_states, update_probs=0.75
+                new_state=n_hidden_states, old_state=hidden_states, update_probs=self.update_probs
             )
             residual, _ = stochastic_update(
                 new_state=n_residual, old_state=residual, mask=mask
@@ -473,6 +477,9 @@ class MambaBlock(nn.Module):
 
         bidirectional = config.bidirectional
         bidirectional_strategy = config.bidirectional_strategy
+        update_probs = config.update_probs
+
+
         factory_kwargs = {"device": device, "dtype": dtype}
 
         super().__init__()
@@ -487,6 +494,7 @@ class MambaBlock(nn.Module):
             residual_in_fp32=residual_in_fp32,
             bidirectional=bidirectional,
             bidirectional_strategy=bidirectional_strategy,
+            update_probs=update_probs,
             **factory_kwargs,
         )
         # self.lm_head = nn.Linear(d_model, vocab_size, bias=False, **factory_kwargs)
@@ -527,7 +535,7 @@ class MambaBlock(nn.Module):
 
 
 class mamba_block_for_input_ids(nn.Module):
-    def __init__(self, d_model, n_layer, bidirectional, vocab_size):
+    def __init__(self, d_model, n_layer, bidirectional, vocab_size, update_probs=0.5):
         super(mamba_block_for_input_ids, self).__init__()
 
         self.input_dims = d_model
@@ -542,6 +550,7 @@ class mamba_block_for_input_ids(nn.Module):
                 d_model=d_model,
                 n_layer=n_layer,
                 bidirectional=bidirectional,
+                update_probs=update_probs
             )
         )
 
@@ -577,7 +586,7 @@ class mamba_block_for_input_ids(nn.Module):
 
 
 class mamba_block(nn.Module):
-    def __init__(self, d_model, n_layer, bidirectional):
+    def __init__(self, d_model, n_layer, bidirectional, update_probs=0.5):
         super(mamba_block, self).__init__()
 
         self.input_dims = d_model
@@ -588,6 +597,7 @@ class mamba_block(nn.Module):
                 d_model=d_model,
                 n_layer=n_layer,
                 bidirectional=bidirectional,
+                update_probs=update_probs
             )
         )
 
