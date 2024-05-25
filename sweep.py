@@ -32,8 +32,6 @@ sweep_configuration = {
         "debugging": {"value": False},
         "train_batch_size": {"values": [4, 8, 16, 32]},
 
-
-
         # change this
         "valid_batch_size": {"value": 16},
         "num_workers": {"value": 8},
@@ -49,4 +47,4 @@ sweep_configuration = {
 if __name__ == '__main__':
 
     sweep_id=wandb.sweep(sweep_configuration, project="test_sweep")
-    wandb.agent(sweep_id=sweep_id, function=train, count=5)
+    wandb.agent(sweep_id=sweep_id, function=train)

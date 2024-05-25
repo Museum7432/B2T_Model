@@ -10,7 +10,7 @@ transformers
 wandb
 tensorboard
 einops
-# hydra-core
+hydra-core
 jsonargparse
 phonemizer
 local-attention

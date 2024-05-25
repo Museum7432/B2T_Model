@@ -49,6 +49,7 @@ base_config = {
 
 
 def train(config=None, project_name="sweep"):
+    torch.set_float32_matmul_precision("medium")
     L.seed_everything(49, workers=True)
 
     if config is None:
@@ -56,9 +57,9 @@ def train(config=None, project_name="sweep"):
         config=wandb.config
 
     # load datamodule
-    data_module = B2T_DataModule(**base_config)
+    data_module = B2T_DataModule(**config)
 
-    model = B2T_Model(**base_config)
+    model = B2T_Model(**config)
 
     checkpoint_callback = ModelCheckpoint(
         monitor="valid_loss",
