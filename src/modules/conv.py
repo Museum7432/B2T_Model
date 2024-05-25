@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .mamba_cu_seqlens import unpack
+
 
 class conv_block(nn.Module):
     def __init__(self, input_dims, output_dims, kernel_size=3, stride=2, groups=1):
@@ -46,7 +48,6 @@ class conv_block(nn.Module):
         # hidden_states = self.bn(hidden_states)
         
         hidden_states = self.act(hidden_states)
-
 
         output_lens = (input_lens + 2 * self.pad - self.kernel_size) // self.stride + 1
 

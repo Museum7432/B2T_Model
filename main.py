@@ -25,10 +25,11 @@ def main(config: DictConfig):
 
     original_cwd = hydra.utils.get_original_cwd()
 
-    shutil.copyfile(
-        os.path.join(original_cwd, "src/data.py"),
-        os.path.join(working_dir, ".hydra/data.py")
-    )
+    for f in ["data", "model", "utils"]:
+        shutil.copyfile(
+            os.path.join(original_cwd, f"src/{f}.py"),
+            os.path.join(working_dir, f".hydra/{f}.py")
+        )
 
     print(f"The current working directory is {working_dir}")
 

@@ -6,8 +6,6 @@ from typing import Union
 from torch.nn import functional as F
 
 
-
-
 @dataclass
 class MambaConfig:
     d_model: int = 2560
@@ -41,23 +39,34 @@ except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
 
-
-'''
+"""
 unpack function: convert packed_hidden_states (batch_size=1) to hidden_states
-'''
+"""
+
+
 def unpack(packed_hidden_states, cu_seqlens):
     batch_size = cu_seqlens.shape[0] - 1
     seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
     hidden_dim = packed_hidden_states.shape[2]
-    hidden_states = torch.zeros(batch_size, seq_len, hidden_dim, dtype=packed_hidden_states.dtype, device=packed_hidden_states.device)
+    hidden_states = torch.zeros(
+        batch_size,
+        seq_len,
+        hidden_dim,
+        dtype=packed_hidden_states.dtype,
+        device=packed_hidden_states.device,
+    )
     for i in range(batch_size):
-        hidden_states[i, : cu_seqlens[i + 1] - cu_seqlens[i], :] = packed_hidden_states[:, cu_seqlens[i] : cu_seqlens[i + 1], :]
+        hidden_states[i, : cu_seqlens[i + 1] - cu_seqlens[i], :] = packed_hidden_states[
+            :, cu_seqlens[i] : cu_seqlens[i + 1], :
+        ]
     return hidden_states
 
 
-'''
+"""
 pack function: convert hidden_states to packed_hidden_states (batch_size=1)
-'''
+"""
+
+
 def pack(hidden_states, cu_seqlens):
     batch_size, seq_len, hidden_dim = hidden_states.shape
     seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -72,11 +81,12 @@ def pack(hidden_states, cu_seqlens):
     packed_hidden_states = hidden_states[mask_3d].view(-1, hidden_dim)
     return packed_hidden_states
 
+
 def pack2d(input_ids, cu_seqlens):
     batch_size, seq_len = input_ids.shape
 
     seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
-    
+
     seq_len_list_2d = seq_len_list.unsqueeze(1)
 
     indices_2d = (
@@ -88,6 +98,7 @@ def pack2d(input_ids, cu_seqlens):
     mask_2d = indices_2d < seq_len_list_2d
     packed_input_ids = input_ids[mask_2d].view(-1)
     return packed_input_ids
+
 
 class Block(nn.Module):
     def __init__(
@@ -154,7 +165,9 @@ class Block(nn.Module):
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
             )
-        hidden_states = self.mixer(hidden_states, cu_seqlens=cu_seqlens, inference_params=inference_params)
+        hidden_states = self.mixer(
+            hidden_states, cu_seqlens=cu_seqlens, inference_params=inference_params
+        )
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
@@ -267,13 +280,24 @@ class MambaWrapper(nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        out = self.mamba_fwd(hidden_states, cu_seqlens=cu_seqlens, inference_params=inference_params)
+        out = self.mamba_fwd(
+            hidden_states, cu_seqlens=cu_seqlens, inference_params=inference_params
+        )
         if self.bidirectional:
-            
+
             # flip the cu_seqlens
             reverse_cu_seqlens = None
             if cu_seqlens is not None:
-                reverse_cu_seqlens = torch.cumsum(torch.cat((torch.tensor([0], device=hidden_states.device), (cu_seqlens[1:]-cu_seqlens[:-1]).flip(dims=(0,))), dim=0), dim=0)
+                reverse_cu_seqlens = torch.cumsum(
+                    torch.cat(
+                        (
+                            torch.tensor([0], device=hidden_states.device),
+                            (cu_seqlens[1:] - cu_seqlens[:-1]).flip(dims=(0,)),
+                        ),
+                        dim=0,
+                    ),
+                    dim=0,
+                )
 
             out_rev = self.mamba_rev(
                 hidden_states.flip(
@@ -289,6 +313,23 @@ class MambaWrapper(nn.Module):
             elif self.bidirectional_strategy == "ew_multiply":
                 out = out * out_rev
         return out
+
+
+def stochastic_update(new_state, old_state, mask=None, update_probs=0.5):
+    # batch_size, seq_len, hidden_size
+
+    if old_state is None:
+        return new_state, mask
+
+    batch_size, seq_len, hidden_size = old_state.shape
+
+    if mask is None:
+        mask = torch.rand((batch_size, seq_len), device=old_state.device) < update_probs
+        mask = mask.unsqueeze(-1).expand_as(old_state)
+
+    output_state = torch.where(mask, new_state, old_state)
+
+    return output_state, mask
 
 
 class MixerModel(nn.Module):
@@ -363,12 +404,33 @@ class MixerModel(nn.Module):
 
         residual = None
         for layer in self.layers:
-            hidden_states, residual = layer(
+            n_hidden_states, n_residual = layer(
                 hidden_states,
                 residual,
                 cu_seqlens=cu_seqlens,
                 inference_params=inference_params,
             )
+            hidden_states, mask = stochastic_update(
+                new_state=n_hidden_states, old_state=hidden_states, update_probs=0.75
+            )
+            residual, _ = stochastic_update(
+                new_state=n_residual, old_state=residual, mask=mask
+            )
+
+            # if self.training:
+            #     hidden_states, mask = stochastic_update(
+            #         new_state=n_hidden_states, old_state=hidden_states, update_probs=0.5
+            #     )
+
+            #     residual, _ = stochastic_update(
+            #         new_state=n_residual, old_state=residual, mask=mask
+            #     )
+            # else:
+            #     hidden_states = n_hidden_states
+
+            #     residual = n_residual
+
+
         if not self.fused_add_norm:
             residual = (
                 (hidden_states + residual) if residual is not None else hidden_states
@@ -444,13 +506,20 @@ class MambaBlock(nn.Module):
         )
 
     def forward(
-        self, hidden_states, position_ids=None, inference_params=None, num_last_tokens=0, cu_seqlens=None
+        self,
+        hidden_states,
+        position_ids=None,
+        inference_params=None,
+        num_last_tokens=0,
+        cu_seqlens=None,
     ):
         """
         "position_ids" is just to be compatible with Transformer generation. We don't use it.
         num_last_tokens: if > 0, only return the logits for the last n tokens
         """
-        hidden_states = self.backbone(hidden_states, inference_params=inference_params, cu_seqlens=cu_seqlens)
+        hidden_states = self.backbone(
+            hidden_states, inference_params=inference_params, cu_seqlens=cu_seqlens
+        )
         if num_last_tokens > 0:
             hidden_states = hidden_states[:, -num_last_tokens:]
 
@@ -467,7 +536,7 @@ class mamba_block_for_input_ids(nn.Module):
         self.vocab_size = vocab_size
 
         self.embedding = nn.Embedding(vocab_size, d_model)
-        
+
         self.model = MambaBlock(
             MambaConfig(
                 d_model=d_model,
@@ -475,13 +544,16 @@ class mamba_block_for_input_ids(nn.Module):
                 bidirectional=bidirectional,
             )
         )
+
     def forward(self, input_ids, input_lens):
 
         if input_ids.size(0) == 1:
             cu_seqlens = None
             packed_input_ids = input_ids
         else:
-            cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1,0), value=0).to(torch.int32)
+            cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1, 0), value=0).to(
+                torch.int32
+            )
             packed_input_ids = pack2d(input_ids, cu_seqlens).unsqueeze(0)
 
         packed_hidden_states = self.embedding(packed_input_ids)
@@ -503,13 +575,14 @@ class mamba_block_for_input_ids(nn.Module):
 
     #     return hidden_states, input_lens
 
+
 class mamba_block(nn.Module):
     def __init__(self, d_model, n_layer, bidirectional):
         super(mamba_block, self).__init__()
 
         self.input_dims = d_model
         self.output_dims = d_model
-        
+
         self.model = MambaBlock(
             MambaConfig(
                 d_model=d_model,
@@ -517,20 +590,16 @@ class mamba_block(nn.Module):
                 bidirectional=bidirectional,
             )
         )
+
     def forward(self, hidden_states, input_lens):
 
-        if hidden_states.size(0) == 1:
+        if len(input_lens) == 1:
             cu_seqlens = None
-            packed_hidden_states = hidden_states
         else:
-            cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1,0), value=0).to(torch.int32)
-            packed_hidden_states = pack(hidden_states, cu_seqlens).unsqueeze(0)
+            cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1, 0), value=0).to(
+                torch.int32
+            )
 
-        packed_hidden_states = self.model(packed_hidden_states, cu_seqlens=cu_seqlens)
+        packed_hidden_states = self.model(hidden_states, cu_seqlens=cu_seqlens)
 
-        if hidden_states.size(0) == 1:
-            hidden_states = packed_hidden_states
-        else:
-            hidden_states = unpack(packed_hidden_states, cu_seqlens)
-
-        return hidden_states, input_lens
+        return packed_hidden_states, input_lens

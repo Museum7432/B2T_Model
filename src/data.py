@@ -214,7 +214,7 @@ class dataset(Dataset):
             # spikePow = spikePow * noise
 
             noise = np.random.normal(
-                loc=1, scale=0.2, size=spikePow.shape
+                loc=1, scale=0.1, size=spikePow.shape
             ).astype("float32")
             spikePow = spikePow * noise
 
@@ -267,15 +267,10 @@ class dataset(Dataset):
     
         # shift spikePow randomly
         if self.add_noises:
-            _start = np.random.randint(5)
+            _start = np.random.randint(8)
             spikePow = spikePow[_start:]
             spikePow_mask = spikePow_mask[_start:]
 
-        # shift spikePow randomly
-        # if self.add_noises:
-        #     _start = np.random.randint(8)
-        #     spikePow = spikePow[_start:]
-        #     spikePow_mask = spikePow_mask[_start:]
         re = {
             "spikePow": spikePow,
             "spikePow_mask": spikePow_mask,
@@ -384,49 +379,11 @@ def collate_fn_factory(add_noises=False):
             if f in batch.keys():
                 batch[f] = _pad(batch[f], constant_values=v)
 
-        # pad spikePow and spikePow_mask
-        target_length = max([len(i) for i in batch["spikePow"]])
+        # concatenate spikePow
+        # 1, seq_len, 256
+        batch["spikePow"] = np.expand_dims(np.concatenate(batch["spikePow"]), axis=0)
+        batch["spikePow_mask"] = np.concatenate(batch["spikePow_mask"])
 
-        # if add_noises:
-        #     target_length += np.random.randint(10)
-
-        for i in range(len(batch["spikePow"])):
-
-            spikePow = batch["spikePow"][i]
-            spikePow_mask = batch["spikePow_mask"][i]
-
-            additional = target_length - len(spikePow)
-
-            _start = 0
-
-            # if not add_noises and additional > 0:
-            #     _start = np.random.randint(additional)
-            #     _start = _start % 64
-
-            _end = additional - _start
-
-            start_pad = np.random.normal(loc=0, scale=0.1, size=(_start, 256)).astype(
-                "float32"
-            )
-
-            spikePow = np.vstack([start_pad, spikePow])
-
-            spikePow = np.pad(
-                spikePow,
-                ((0, _end), (0, 0)),
-                # mode="edge"
-                constant_values=0,
-            )
-            spikePow_mask = np.pad(
-                spikePow_mask, (_start, _end), constant_values=0
-            )
-
-            batch["spikePow_lens"][i] + _start
-            batch["spikePow"][i] = spikePow
-            batch["spikePow_mask"][i] = spikePow_mask
-
-        batch["spikePow"] = np.array(batch["spikePow"])
-        batch["spikePow_mask"] = np.array(batch["spikePow_mask"])
 
         for f in tensor_fields:
             if f in batch.keys():

@@ -21,10 +21,12 @@ encoder:
     # - ["t5_conv_cross_att", input_dims, n_layer]
 
     # - ["conv", 768, 768, 3, 2, 4]
+    - ["unpack"]
     - ["conv", 256, 1024, 7, 2, 256]
     - ["highway", 1024, 2]
     - ["conv", 1024, 512, 3, 2, 1]
     - ["highway", 512, 2]
+    - ["pack"]
     - ["mamba", 512, 6, true]
 
 decoders_conf:
@@ -38,8 +40,10 @@ decoders_conf:
 decoders_layers:
   ctc_al:
     - ["mamba", 512, 5, true]
+    - ["unpack"]
   ctc_ph:
     - ["mamba", 512, 2, true]
+    - ["unpack"]
   dec_al:
     # - ["mamba", 512, 1, true]
     - ["t5_dec", 512, 4]

@@ -19,16 +19,13 @@ from .utils import phonetic_decode, decode, vocab, phoneme_vocab
 import numpy as np
 
 
-from .modules.mamba_cu_seqlens import mamba_block, mamba_block_for_input_ids
+from .modules.mamba_cu_seqlens import mamba_block, mamba_block_for_input_ids, unpack
 
 # from .modules.mamba import mamba_block
-from .modules.lstm import lstm_block
 from .modules.highway import Highway
+from .modules.others import Pack, UnPack
 from .modules.conv import conv_block
 from .modules.resnet import resnet_block
-from .modules.pooling import consecutive_pooling
-from .modules.local_attention import local_attention_block
-from .modules.t5_encoder import t5_encoder
 import itertools
 
 
@@ -45,6 +42,8 @@ class modules_stack(L.LightningModule):
 
         modules_list = []
 
+        self.output_dims = 0
+
         for l in layers:
             if l[0] == "mamba":
                 _, in_channels, n_layer, bidirectional = l
@@ -55,6 +54,7 @@ class modules_stack(L.LightningModule):
                         bidirectional=bidirectional,
                     )
                 )
+                self.output_dims = in_channels
             elif l[0] == "pooling":
                 _, pooling_type, kernel_size, stride = l
 
@@ -80,32 +80,24 @@ class modules_stack(L.LightningModule):
                         hidden_size=hidden_size,
                     )
                 )
-            elif l[0] == "attention":
-                _, in_dims, depth, local_attn_window_size, positional_embeding = l
-                modules_list.append(
-                    local_attention_block(
-                        input_dims=in_dims,
-                        depth=depth,
-                        local_attn_window_size=local_attn_window_size,
-                        positional_embeding=positional_embeding,
-                    )
-                )
+                self.output_dims = out_dims
+
             elif l[0] == "highway":
                 _, in_channels, n_layer = l
                 modules_list.append(Highway(input_dim=in_channels, num_layers=n_layer))
+                self.output_dims = in_channels
 
             elif l[0] == "conv":
                 _, input_dims, output_dims, kernel_size, stride, groups = l
                 modules_list.append(
                     conv_block(input_dims, output_dims, kernel_size, stride, groups)
                 )
-            elif l[0] == "t5":
-                _, input_dims, n_layer = l
-                modules_list.append(t5_encoder(input_dims, n_layer))
+                self.output_dims = output_dims
 
-            elif l[0] == "lstm":
-                _, input_size, num_layers, bidirectional = l
-                modules_list.append(lstm_block(input_size, num_layers, bidirectional))
+            elif l[0] == "pack":
+                modules_list.append(Pack())
+            elif l[0] == "unpack":
+                modules_list.append(UnPack())
             else:
                 raise ValueError(f"unknown layer: {l[0]}")
 
@@ -114,7 +106,7 @@ class modules_stack(L.LightningModule):
         if len(self.layers) == 0:
             return
 
-        self.output_dims = self.layers[-1].output_dims
+        assert self.output_dims != 0
 
     def forward(self, hidden_states, spikePow_lens):
         for layer in self.layers:
@@ -453,7 +445,9 @@ def get_decoder(decoder_type, layers_config):
 
 
 class joint_Model(BaseModel):
-    def __init__(self, config: DictConfig, decoders_conf=None, use_addtional_corpus=None):
+    def __init__(
+        self, config: DictConfig, decoders_conf=None, use_addtional_corpus=None
+    ):
         # decoder_conf: if not none, only load those layers
         super(joint_Model, self).__init__()
         self.save_hyperparameters()
@@ -514,10 +508,10 @@ class joint_Model(BaseModel):
             )
 
     def forward(self, spikePow, spikePow_mask, spikePow_lens, encoder_only=False):
-        # _input (batch_size, input_len, input_channels)
+        # spikePow (1, packed_input_len, input_channels)
         if self.word_level:
             mask_embeddings = self.mask_tokens(spikePow_mask)
-            spikePow[spikePow_mask != 0, :] = 0
+            spikePow[0, spikePow_mask != 0, :] = 0
             spikePow = spikePow + mask_embeddings
 
         hidden_states, output_lens = self.encoder(spikePow, spikePow_lens)
@@ -571,9 +565,7 @@ class joint_Model(BaseModel):
         )
         self.decoders["ctc_al1"].enable_grad()
 
-        self.log(
-            f"al1_addi_l", add_loss.detach(), batch_size=len(batch["spikePow"])
-        )
+        self.log(f"al1_addi_l", add_loss.detach(), batch_size=len(batch["spikePow"]))
 
         loss, _, _ = self.decoders["ctc_al"].calc_loss(
             ps_hidden_states.detach(),
@@ -583,9 +575,7 @@ class joint_Model(BaseModel):
                 "sent_ids_len": batch["ps_label_lens"],
             },
         )
-        self.log(
-            f"al_addi_l", loss.detach(), batch_size=len(batch["spikePow"])
-        )
+        self.log(f"al_addi_l", loss.detach(), batch_size=len(batch["spikePow"]))
 
         return (loss1 + loss) / 2
 

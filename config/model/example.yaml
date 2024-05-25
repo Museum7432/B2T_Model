@@ -3,25 +3,25 @@
 input_dims: 256
 use_addtional_corpus: false
 max_epochs: 10
-word_level: false
+word_level: True
 val_check_interval: 0.5
 
 encoder:
   layers:
     # - ["mamba", input_channels, n_layer, bidirectional]
-    # - ["t5", input_channels, n_layer]
     # - ["resnet", in_dims, out_dims, stride, hidden_size]
     # - ["pooling", pooling_type, kernel_size, stride]
-    # - ["attention", input_dims, n_layer, local_attn_window_size, positional_embeding]
     # - ["highway", input_dim, num_layers]
     # - ["conv", input_dims, output_dims, kernel_size, stride, groups]
-    # - ["lstm", input_size, num_layers, bidirectional]
-    # - ["t5_conv_cross_att", input_dims, n_layer]
+    # - ["pack"]
+    # - ["unpack"]
     
+    - ["unpack"]
     - ["conv", 256, 1024, 7, 2, 256]
     - ["highway", 1024, 2]
     - ["conv", 1024, 512, 3, 2, 1]
     - ["highway", 512, 2]
+    - ["pack"]
     - ["mamba", 512, 5, true]
 
 decoders_conf:
@@ -29,21 +29,25 @@ decoders_conf:
   # name, type, loss weights
   - ["ctc_al", "ctc_alphabet", 0.5]
   - ["ctc_ph", "ctc_phonetic", 0.5]
-  - ["dec_al", "decoder_alphabet", 0.5]
-  - ["dec_ph", "decoder_phonetic", 0.5]
+  # - ["dec_al", "decoder_alphabet", 0.5]
+  # - ["dec_ph", "decoder_phonetic", 0.5]
 
 decoders_layers:
   ctc_al:
     - ["mamba", 512, 2, true]
+    - ["unpack"]
   ctc_ph:
     - ["mamba", 512, 2, true]
+    - ["unpack"]
   dec_al:
     - ["mamba", 512, 2, true]
     # the last layers should be t5 decoder
     # - ["t5_dec", input_channels, n_layer]
+    - ["unpack"]
     - ["t5_dec", 512 , 4]
   dec_ph:
     - ["mamba", 512, 2, true]
+    - ["unpack"]
     - ["t5_dec", input_channels, n_layer]
 
 optimizer:
