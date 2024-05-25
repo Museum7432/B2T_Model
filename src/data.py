@@ -208,7 +208,7 @@ class dataset(Dataset):
             sentenceText = self.sentenceTexts[idx].replace(" ", "|")
             phonemizedText = self.phonemizedTexts[idx].replace(" ", "|")
 
-        spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
+        # spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
 
         if self.sp_noise_std is not None and self.sp_noise_std != 0:
             # noise_std = np.random.rand() * 0.25
