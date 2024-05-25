@@ -19,9 +19,9 @@ from .utils import phonetic_decode, decode, vocab, phoneme_vocab
 import numpy as np
 import os
 
-from .modules.mamba_cu_seqlens import mamba_block, mamba_block_for_input_ids, unpack
+# from .modules.mamba_cu_seqlens import mamba_block
 
-# from .modules.mamba import mamba_block
+from .modules.mamba import mamba_block
 from .modules.highway import Highway
 from .modules.others import Pack, UnPack
 from .modules.conv import conv_block
@@ -123,7 +123,7 @@ class CTC_decoder(L.LightningModule):
 
         self.update_probs = update_probs
 
-        self.layers = [["mamba", input_dims, n_layer, True, update_probs], ["unpack"]]
+        self.layers = [["mamba", input_dims, n_layer, True, update_probs]]
 
         self.encoder = modules_stack(self.layers)
 
@@ -226,7 +226,6 @@ class feature_extractor(L.LightningModule):
             ["highway", conv_size, 2],
             ["conv", conv_size, output_dims, 3, 2, 1],
             ["highway", output_dims, 2],
-            ["pack"],
         ]
 
         self.extractor = modules_stack(self.layers)

@@ -10,19 +10,26 @@ unpack function: convert packed_hidden_states (batch_size=1) to hidden_states
 def unpack(packed_hidden_states, cu_seqlens):
     batch_size = cu_seqlens.shape[0] - 1
     seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
-    hidden_dim = packed_hidden_states.shape[2]
-    hidden_states = torch.zeros(
-        batch_size,
-        seq_len,
-        hidden_dim,
-        dtype=packed_hidden_states.dtype,
-        device=packed_hidden_states.device,
+
+    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
+
+    packed_hidden_states = packed_hidden_states.squeeze(0)
+
+    ori_indices = torch.arange(batch_size * seq_len, device=cu_seqlens.device).reshape(
+        (batch_size, seq_len)
     )
-    for i in range(batch_size):
-        hidden_states[i, : cu_seqlens[i + 1] - cu_seqlens[i], :] = packed_hidden_states[
-            :, cu_seqlens[i] : cu_seqlens[i + 1], :
-        ]
-    return hidden_states
+
+    indices_offset = seq_len - seq_len_list
+
+    last_offset = indices_offset[-1].item()
+
+    indices_offset[-1] = 0
+
+    flatten_indices_offset = indices_offset.roll(1).cumsum(0)
+    ori_indices = ori_indices - flatten_indices_offset.unsqueeze(1)
+
+    ori_indices = torch.where(ori_indices >= len(packed_hidden_states), 0, ori_indices)
+    return packed_hidden_states[ori_indices]
 
 
 """
@@ -63,33 +70,62 @@ def pack2d(input_ids, cu_seqlens):
     return packed_input_ids
 
 
+def reverse_hidden_states(hidden_states, seq_lens):
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+
+    assert batch_size == len(seq_lens)
+
+    indices = torch.arange(batch_size * seq_len, device=hidden_states.device).reshape(
+        batch_size, seq_len
+    )
+
+    indices_offset = seq_len - seq_lens
+
+    indices = indices - indices_offset.unsqueeze(1)
+
+    indices = torch.where(indices < 0, 0, indices)
+
+    return hidden_states.reshape(batch_size * seq_len, hidden_dim)[indices].flip(1)
+
+def stochastic_update(new_state, old_state, mask=None, update_probs=0.5):
+    # batch_size, seq_len, hidden_size
+
+    if old_state is None:
+        return new_state, mask
+
+    batch_size, seq_len, hidden_size = old_state.shape
+
+    if mask is None:
+        mask = torch.rand((batch_size, seq_len), device=old_state.device) < update_probs
+        mask = mask.unsqueeze(-1).expand_as(old_state)
+
+    output_state = torch.where(mask, new_state, old_state)
+
+    return output_state, mask
+    
 class Pack(nn.Module):
     def __init__(self):
-      super().__init__()
+        super().__init__()
 
     def forward(self, hidden_states, input_lens):
         if len(hidden_states) == 1:
             return hidden_states, input_lens
 
-        cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1, 0), value=0).to(
-            torch.int32
-        )
+        cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1, 0), value=0).to(torch.int32)
         packed_hidden_states = pack(hidden_states, cu_seqlens).unsqueeze(0)
-        
-        
+
         return packed_hidden_states, input_lens
+
 
 class UnPack(nn.Module):
     def __init__(self):
-      super().__init__()
+        super().__init__()
 
     def forward(self, hidden_states, input_lens):
         if len(input_lens) == 1:
             return hidden_states, input_lens
 
-        cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1, 0), value=0).to(
-            torch.int32
-        )
+        cu_seqlens = F.pad(input_lens.cumsum(0), pad=(1, 0), value=0).to(torch.int32)
         hidden_states = unpack(hidden_states, cu_seqlens)
-        
+
         return hidden_states, input_lens

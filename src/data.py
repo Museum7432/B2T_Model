@@ -379,6 +379,20 @@ def collate_fn_factory(add_noises=False):
         # 1, seq_len, 256
         batch["spikePow"] = np.expand_dims(np.concatenate(batch["spikePow"]), axis=0)
         batch["spikePow_mask"] = np.concatenate(batch["spikePow_mask"])
+        
+        # target_length = max([len(i) for i in batch["spikePow"]])
+        # for i in range(len(batch["spikePow"])):
+        #     additional = target_length - len(batch["spikePow"][i])
+
+        #     batch["spikePow"][i] = np.pad(
+        #         batch["spikePow"][i],
+        #         ((0, additional), (0, 0)),
+        #         "constant",
+        #         constant_values=0,
+        #     )
+        #     batch["spikePow_mask"][i] = np.pad(
+        #         batch["spikePow_mask"][i], (0, additional), constant_values=0
+        #     )
 
         for f in tensor_fields:
             if f in batch.keys():
@@ -424,7 +438,7 @@ class B2T_DataModule(L.LightningDataModule):
 
         self.use_addtional_corpus = use_addtional_corpus
 
-        self.add_noises=add_noises
+        self.add_noises = add_noises
 
     def setup(self, stage: str):
 

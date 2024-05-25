@@ -48,20 +48,25 @@ unpack function: convert packed_hidden_states (batch_size=1) to hidden_states
 def unpack(packed_hidden_states, cu_seqlens):
     batch_size = cu_seqlens.shape[0] - 1
     seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
-    hidden_dim = packed_hidden_states.shape[2]
-    hidden_states = torch.zeros(
-        batch_size,
-        seq_len,
-        hidden_dim,
-        dtype=packed_hidden_states.dtype,
-        device=packed_hidden_states.device,
-    )
-    for i in range(batch_size):
-        hidden_states[i, : cu_seqlens[i + 1] - cu_seqlens[i], :] = packed_hidden_states[
-            :, cu_seqlens[i] : cu_seqlens[i + 1], :
-        ]
-    return hidden_states
 
+    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
+
+    packed_hidden_states = packed_hidden_states.squeeze(0)
+
+    ori_indices = torch.arange(batch_size* seq_len, device=cu_seqlens.device).reshape((batch_size, seq_len))
+
+    indices_offset = seq_len - seq_len_list
+
+    last_offset = indices_offset[-1].item()
+
+    indices_offset[-1] = 0
+
+    flatten_indices_offset = indices_offset.roll(1).cumsum(0)
+    ori_indices = ori_indices - flatten_indices_offset.unsqueeze(1)
+    
+    # pad packed_hidden_states
+    packed_hidden_states = F.pad(packed_hidden_states, pad=(0, 0, 0, last_offset))
+    return packed_hidden_states[ori_indices]
 
 """
 pack function: convert hidden_states to packed_hidden_states (batch_size=1)

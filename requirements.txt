@@ -15,7 +15,7 @@ jsonargparse
 phonemizer
 local-attention
 causal-conv1d>=1.2.0
-mamba-ssm @ git+https://github.com/zigzagcai/mamba.git@feat/add-cu_seqlens
+mamba-ssm
 # flashlight-text
 # flashlight-textkenlm
 samplerate
