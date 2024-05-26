@@ -26,9 +26,8 @@ def unpack(packed_hidden_states, cu_seqlens):
     indices_offset[-1] = 0
 
     flatten_indices_offset = indices_offset.roll(1).cumsum(0)
-    ori_indices = ori_indices - flatten_indices_offset.unsqueeze(1)
+    ori_indices = (ori_indices - flatten_indices_offset.unsqueeze(1)) % seq_len
 
-    ori_indices = torch.where(ori_indices >= len(packed_hidden_states), 0, ori_indices)
     return packed_hidden_states[ori_indices]
 
 
@@ -81,9 +80,7 @@ def reverse_hidden_states(hidden_states, seq_lens):
 
     indices_offset = seq_len - seq_lens
 
-    indices = indices - indices_offset.unsqueeze(1)
-
-    indices = torch.where(indices < 0, 0, indices)
+    indices = (indices - indices_offset.unsqueeze(1))% seq_len
 
     return hidden_states.reshape(batch_size * seq_len, hidden_dim)[indices].flip(1)
 

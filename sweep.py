@@ -1,5 +1,6 @@
 from src.train import train
 import wandb
+from argparse import ArgumentParser
 
 sweep_configuration = {
     "name": "sweep",
@@ -39,6 +40,12 @@ sweep_configuration = {
 }
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--sweep_id", type=str, default=None)
+    args = parser.parse_args()
 
-    sweep_id = wandb.sweep(sweep_configuration, project="test_sweep")
+    if args.sweep_id is None:
+        sweep_id = wandb.sweep(sweep_configuration, project="test_sweep")
+    else:
+        sweep_id = args.sweep_id
     wandb.agent(sweep_id=sweep_id, function=train)
