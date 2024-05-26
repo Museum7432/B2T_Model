@@ -451,6 +451,14 @@ class B2T_Model(L.LightningModule):
 
         self.log("wer", total_wer, prog_bar=True)
 
+
+        valid_loss = self.trainer.callback_metrics['valid_loss']
+        
+        score = total_wer + valid_loss/2
+
+        self.log("score", score, prog_bar=True)
+
+
     def num_steps(self) -> int:
         """Get number of steps"""
         # Accessing _data_source is flaky and might break

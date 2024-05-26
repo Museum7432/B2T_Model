@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 sweep_configuration = {
     "name": "sweep",
     "method": "bayes",
-    "metric": {"goal": "minimize", "name": "val_al_loss"},
+    "metric": {"goal": "minimize", "name": "score"},
     "parameters": {
         "conv_size": {"values": [512, 768, 1024, 2048]},
 
@@ -50,7 +50,9 @@ sweep_configuration = {
         "valid_batch_size": {"value": 16},
         "num_workers": {"value": 16},
         "val_check_interval": {"value": 0.5},
-        "max_epochs": {"min": 4, "max":15},
+
+        # "max_epochs": {"min": 4, "max":10},
+        "max_epochs": {"value": 10},
 
         "gradient_clip_val": {"max": 1.5, "min": 0.1},
     },
