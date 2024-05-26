@@ -4,6 +4,10 @@ from src.train import train
 
 base_config = {
     "conv_size": 1024,
+    "conv_kernel1":7,
+    "conv_kernel2":3,
+    "conv_g1":256,
+    "conv_g2":1,
     "hidden_size": 512,
     "encoder_n_layer": 2,
     "decoder_n_layer": 2,

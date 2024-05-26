@@ -178,7 +178,11 @@ class CTC_decoder(L.LightningModule):
             zero_infinity=True,
         )
 
-        return {"loss": loss, "logits": output["logits"], "output_lens": output["output_lens"]}
+        return {
+            "loss": loss,
+            "logits": output["logits"],
+            "output_lens": output["output_lens"],
+        }
 
     def batch_decode(self, ids, output_lens=None, raw_ouput=False):
 
@@ -215,16 +219,24 @@ class CTC_decoder(L.LightningModule):
 
 
 class feature_extractor(L.LightningModule):
-    def __init__(self, output_dims=512, conv_size=1024):
+    def __init__(
+        self,
+        output_dims=512,
+        conv_size=1024,
+        conv_kernel1=7,
+        conv_kernel2=3,
+        conv_g1=256,
+        conv_g2=1,
+    ):
         super(feature_extractor, self).__init__()
 
         self.output_dims = output_dims
 
         self.layers = [
             ["unpack"],
-            ["conv", 256, conv_size, 7, 2, 256],
+            ["conv", 256, conv_size, conv_kernel1, 2, conv_g1],
             ["highway", conv_size, 2],
-            ["conv", conv_size, output_dims, 3, 2, 1],
+            ["conv", conv_size, output_dims, conv_kernel2, 2, conv_g2],
             ["highway", output_dims, 2],
         ]
 
@@ -240,6 +252,10 @@ class B2T_Model(L.LightningModule):
     def __init__(
         self,
         conv_size=1024,
+        conv_kernel1=7,
+        conv_kernel2=3,
+        conv_g1=256,
+        conv_g2=1,
         hidden_size=512,
         encoder_n_layer=5,
         decoder_n_layer=5,
@@ -256,7 +272,7 @@ class B2T_Model(L.LightningModule):
         weight_decay=0.1,
         eps=1e-08,
         lr_warmup_perc=0.1,  # lr warmup for the first 10% of the training
-        **other_args
+        **other_args,
     ):
         super(B2T_Model, self).__init__()
         # self.save_hyperparameters()
@@ -272,7 +288,12 @@ class B2T_Model(L.LightningModule):
         self.update_probs = update_probs
 
         self.feature_extractor = feature_extractor(
-            output_dims=hidden_size, conv_size=conv_size
+            output_dims=hidden_size,
+            conv_size=conv_size,
+            conv_kernel1=conv_kernel1,
+            conv_kernel2=conv_kernel2,
+            conv_g1=conv_g1,
+            conv_g2=conv_g2,
         )
 
         self.encoder = modules_stack(
@@ -296,7 +317,7 @@ class B2T_Model(L.LightningModule):
         self.loss_weights = loss_weights
 
     def forward(self, spikePow, spikePow_mask, spikePow_lens, encoder_only=False):
-        
+
         hidden_states, output_lens = self.feature_extractor(spikePow, spikePow_lens)
 
         hidden_states, output_lens = self.encoder(hidden_states, output_lens)
@@ -352,7 +373,7 @@ class B2T_Model(L.LightningModule):
         #     loss += add_loss * 0.1
 
         if torch.isnan(loss):
-            raise Exception(f'Loss is NaN')
+            raise Exception(f"Loss is NaN")
 
         return loss
 
@@ -425,7 +446,6 @@ class B2T_Model(L.LightningModule):
             total_wer += wer
 
             self.log(f"wer_{k}", wer)
-
 
         total_wer = total_wer / len(self.decoders)
 
