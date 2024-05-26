@@ -49,7 +49,7 @@ sweep_configuration = {
         "valid_batch_size": {"value": 16},
         "num_workers": {"value": 8},
         "val_check_interval": {"value": 0.5},
-        "max_epochs": {"min": 4, "max":25},
+        "max_epochs": {"min": 4, "max":15},
 
         "gradient_clip_val": {"max": 1.5, "min": 0.1},
     },
