@@ -22,7 +22,7 @@ sweep_configuration = {
         "decoder_n_layer": {"min": 1, "max":8},
         
         
-        "peak_lr": {"max": 3e-3, "min": 2e-5},
+        "peak_lr": {"max": 1e-3, "min": 5e-6},
         "update_probs": {"max": 0.95, "min": 0.5},
 
         "al_loss_weight": {"max": 0.7, "min": 0.3},

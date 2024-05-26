@@ -11,22 +11,17 @@ def unpack(packed_hidden_states, cu_seqlens):
     batch_size = cu_seqlens.shape[0] - 1
     seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
 
-    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
-
     packed_hidden_states = packed_hidden_states.squeeze(0)
 
-    ori_indices = torch.arange(batch_size * seq_len, device=cu_seqlens.device).reshape(
-        (batch_size, seq_len)
+    ori_indices = (
+        torch.arange(seq_len, device=cu_seqlens.device)
+        .unsqueeze(0)
+        .expand((batch_size, seq_len))
     )
 
-    indices_offset = seq_len - seq_len_list
-
-    last_offset = indices_offset[-1].item()
-
-    indices_offset[-1] = 0
-
-    flatten_indices_offset = indices_offset.roll(1).cumsum(0)
-    ori_indices = (ori_indices - flatten_indices_offset.unsqueeze(1)) % seq_len
+    ori_indices = (ori_indices + cu_seqlens[:-1].unsqueeze(1)) % (
+        len(packed_hidden_states)
+    )
 
     return packed_hidden_states[ori_indices]
 
@@ -80,9 +75,12 @@ def reverse_hidden_states(hidden_states, seq_lens):
 
     indices_offset = seq_len - seq_lens
 
-    indices = (indices - indices_offset.unsqueeze(1))% seq_len
+    indices = (indices - indices_offset.unsqueeze(1)) % (seq_len * batch_size)
 
-    return hidden_states.reshape(batch_size * seq_len, hidden_dim)[indices].flip(1)
+    indices = indices.flip(1)
+
+    return hidden_states.reshape(batch_size * seq_len, hidden_dim)[indices]
+
 
 def stochastic_update(new_state, old_state, mask=None, update_probs=0.5):
     # batch_size, seq_len, hidden_size
@@ -99,7 +97,8 @@ def stochastic_update(new_state, old_state, mask=None, update_probs=0.5):
     output_state = torch.where(mask, new_state, old_state)
 
     return output_state, mask
-    
+
+
 class Pack(nn.Module):
     def __init__(self):
         super().__init__()
