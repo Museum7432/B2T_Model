@@ -11,7 +11,7 @@ sweep_configuration = {
         "hidden_size": {"values": [512, 768]},
         "encoder_n_layer": {"values": [6, 7, 8, 9, 10, 11, 12, 13]},
         "decoder_n_layer": {"values": [2, 3, 4, 5, 6]},
-        "lr": {"max": 0.1, "min": 2e-5},
+        "peak_lr": {"max": 0.1, "min": 2e-5},
         "update_probs": {"max": 0.95, "min": 0.5},
         "al_loss_weight": {"value": 0.5},
         "last_lr": {"value": 1e-6},
