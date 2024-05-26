@@ -14,7 +14,7 @@ from jsonargparse import ArgumentParser
 import shutil
 
 
-def train(config=None, project_name="sweep"):
+def train(config=None, project_name="sweep", save_ckpt=False):
     torch.set_float32_matmul_precision("medium")
     L.seed_everything(49, workers=True)
 
@@ -27,16 +27,18 @@ def train(config=None, project_name="sweep"):
 
     model = B2T_Model(**config)
 
-    checkpoint_callback = ModelCheckpoint(
-        monitor="valid_loss",
-        mode="min",
-        save_top_k=1,
-        save_last=True,
-        save_weights_only=True,
-    )
     lr_monitor = LearningRateMonitor(logging_interval="step")
+    callbacks = [lr_monitor]
+    if save_ckpt:
+        checkpoint_callback = ModelCheckpoint(
+            monitor="valid_loss",
+            mode="min",
+            save_top_k=1,
+            save_last=True,
+            save_weights_only=True,
+        )
+        callbacks.append(checkpoint_callback)
 
-    callbacks = [lr_monitor, checkpoint_callback]
 
     wandb_logger = WandbLogger(project=project_name)
 

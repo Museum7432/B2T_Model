@@ -16,13 +16,13 @@ sweep_configuration = {
         "conv_g1": {"values": [256, 64, 32, 4, 1]},
         "conv_g2": {"values": [256, 64, 32, 4, 1]},
 
-        "hidden_size": {"values": [512, 768]},
+        "hidden_size": {"values": [512, 768, 1024]},
 
-        "encoder_n_layer": {"min": 1, "max":13},
+        "encoder_n_layer": {"min": 1, "max":12},
         "decoder_n_layer": {"min": 1, "max":8},
         
         
-        "peak_lr": {"max": 1e-3, "min": 5e-6},
+        "peak_lr": {"max": 5e-4, "min": 5e-6},
         "update_probs": {"max": 0.95, "min": 0.5},
 
         "al_loss_weight": {"max": 0.7, "min": 0.3},
@@ -44,7 +44,8 @@ sweep_configuration = {
         "sp_noise_std": {"max": 1.0, "min": 0.01},
         "gaussian_filter_sigma": {"max": 3.0, "min": 0.01},
         "debugging": {"value": False},
-        "train_batch_size": {"values": [8, 16]},
+        
+        "train_batch_size": {"value": 16},
         # change this
         "valid_batch_size": {"value": 16},
         "num_workers": {"value": 16},
