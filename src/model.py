@@ -351,6 +351,9 @@ class B2T_Model(L.LightningModule):
 
         #     loss += add_loss * 0.1
 
+        if torch.isnan(loss):
+            raise Exception(f'Loss is NaN')
+
         return loss
 
     def on_validation_epoch_start(self):
