@@ -47,7 +47,7 @@ sweep_configuration = {
         "train_batch_size": {"values": [8, 16]},
         # change this
         "valid_batch_size": {"value": 16},
-        "num_workers": {"value": 8},
+        "num_workers": {"value": 16},
         "val_check_interval": {"value": 0.5},
         "max_epochs": {"min": 4, "max":15},
 
