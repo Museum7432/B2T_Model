@@ -51,6 +51,7 @@ def train(config=None, project_name="sweep", save_ckpt=False):
         gradient_clip_val=config["gradient_clip_val"],
         logger=[wandb_logger],
         callbacks=callbacks,
+        enable_checkpointing=save_ckpt
     )
 
     trainer.fit(model, datamodule=data_module)
