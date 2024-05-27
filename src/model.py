@@ -454,7 +454,7 @@ class B2T_Model(L.LightningModule):
 
         valid_loss = self.trainer.callback_metrics['valid_loss']
         
-        score = total_wer + valid_loss/2
+        score = total_wer + valid_loss/6
 
         self.log("score", score, prog_bar=True)
 
