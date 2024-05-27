@@ -19,11 +19,11 @@ def download_files():
         ["test", "gfolder", "1v6lMnlrPsG0f71_FgsBhx712lLa695Qe"],
         ["train", "gfolder", "179Qx7YxLs1X1-uMR2Z5OhUeMIQrs0RsK"],
         ["valid", "gfolder", "1UaE9sCBn5xxJ4EiRrpnlcKC6_rIcf4Jp"],
-        [
-            "en_us_cmudict_forward.pt",
-            "file",
-            "https://public-asai-dl-models.s3.eu-central-1.amazonaws.com/DeepPhonemizer/en_us_cmudict_forward.pt",
-        ],
+        # [
+        #     "en_us_cmudict_forward.pt",
+        #     "file",
+        #     "https://public-asai-dl-models.s3.eu-central-1.amazonaws.com/DeepPhonemizer/en_us_cmudict_forward.pt",
+        # ],
     ]
 
     for dir_name, ftype, gd_id in f_list:
