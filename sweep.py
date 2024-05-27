@@ -19,8 +19,8 @@ sweep_configuration = {
         "update_probs": {"max": 0.9, "min": 0.5},
         "al_loss_weight": {"value": 0.5},
         "last_lr": {"value": 1e-6},
-        "beta_1": {"max": 0.1, "min": 1},
-        "beta_2": {"max": 0.1, "min": 1},
+        "beta_1": {"max": 0.1, "min": 1.},
+        "beta_2": {"max": 0.1, "min": 1.},
         "eps": {"value": 1e-08},
         "weight_decay": {"values": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]},
 
