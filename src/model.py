@@ -263,7 +263,7 @@ class B2T_Model(L.LightningModule):
             "al",
             "ph",
         ],  # use the alphabet or phonemes, should be both at training
-        update_probs=0.5,
+        update_probs=None,
         al_loss_weight=0.5,
         peak_lr=1e-4,
         last_lr=1e-6,
