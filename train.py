@@ -10,7 +10,7 @@ base_config = {
     "hidden_size": 512,
     "encoder_n_layer": 7,
     "decoder_n_layer": 3,
-    "update_probs": 0.5,
+    "update_probs": None,
     "al_loss_weight": 0.5,
     "peak_lr": 1e-4,
     "last_lr": 1e-6,

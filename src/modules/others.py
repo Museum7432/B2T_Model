@@ -82,8 +82,11 @@ def reverse_hidden_states(hidden_states, seq_lens):
     return hidden_states.reshape(batch_size * seq_len, hidden_dim)[indices]
 
 
-def stochastic_update(new_state, old_state, mask=None, update_probs=0.5):
+def stochastic_update(new_state, old_state, mask=None, update_probs=None):
     # batch_size, seq_len, hidden_size
+
+    if mask is None and update_probs is None:
+        return new_state, mask
 
     if old_state is None:
         return new_state, mask

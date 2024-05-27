@@ -16,7 +16,11 @@ sweep_configuration = {
         "encoder_n_layer": {"min": 5, "max": 10},
         "decoder_n_layer": {"min": 2, "max": 5},
         "peak_lr": {"max": 1e-3, "min": 3e-6},
-        "update_probs": {"max": 0.9, "min": 0.5},
+        ##############################
+        # this will need another sweep
+        # "update_probs": {"max": 0.9, "min": 0.5},
+        "update_probs": {"value": None},
+        ##############################
         "al_loss_weight": {"value": 0.5},
         "last_lr": {"value": 1e-6},
         "beta_1": {"max": 1., "min": 0.1},
