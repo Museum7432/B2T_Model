@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 sweep_configuration = {
     "name": "sweep",
     "method": "bayes",
-    "metric": {"goal": "minimize", "name": "score"},
+    "metric": {"goal": "minimize", "name": "wer"},
     "parameters": {
         "conv_size": {"value": 1024},
         "conv_kernel1": {"values": [3, 5, 7]},
