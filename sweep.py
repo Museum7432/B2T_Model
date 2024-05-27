@@ -38,10 +38,10 @@ sweep_configuration = {
         "sp_noise_std": {"max": 1.0, "min": 0.01},
         "gaussian_filter_sigma": {"max": 2.0, "min": 0.01},
         "debugging": {"value": False},
-        "train_batch_size": {"value": 8},
+        "train_batch_size": {"value": 16},
         # change this
         "valid_batch_size": {"value": 16},
-        "num_workers": {"value": 8},
+        "num_workers": {"value": 10},
         "val_check_interval": {"value": 0.9},
         # "max_epochs": {"min": 4, "max":10},
         "max_epochs": {"value": 10},
