@@ -1,13 +1,12 @@
-
 from src.train import train
 
 
 base_config = {
     "conv_size": 1024,
-    "conv_kernel1":7,
-    "conv_kernel2":3,
-    "conv_g1":256,
-    "conv_g2":1,
+    "conv_kernel1": 7,
+    "conv_kernel2": 3,
+    "conv_g1": 256,
+    "conv_g2": 1,
     "hidden_size": 512,
     "encoder_n_layer": 7,
     "decoder_n_layer": 3,
@@ -26,7 +25,8 @@ base_config = {
     "test_data_dir": "./dataset/test",
     "word_level": False,
     "use_addtional_corpus": False,
-    "sp_noise_std": 0.2,
+    "sp_noise_std": 0.1,
+    "features_noise_std": 0.1,
     "gaussian_filter_sigma": 0.8,
     "debugging": False,
     "train_batch_size": 4,

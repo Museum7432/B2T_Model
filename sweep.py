@@ -31,14 +31,15 @@ sweep_configuration = {
         "test_data_dir": {"value": "./dataset/test"},
         "word_level": {"value": False},
         "use_addtional_corpus": {"value": False},
-        "sp_noise_std": {"max": 1.0, "min": 0.01},
+        "sp_noise_std": {"max": 0.3, "min": 0.01},
+        "features_noise_std": {"max": 0.3, "min": 0.01},
         "gaussian_filter_sigma": {"max": 2.0, "min": 0.1},
         "debugging": {"value": False},
         "train_batch_size": {"value": 8},
         # change this
         "valid_batch_size": {"value": 16},
-        "num_workers": {"value": 10},
-        "val_check_interval": {"value": 0.9},
+        "num_workers": {"value": 8},
+        "val_check_interval": {"value": 0.5},
         # "max_epochs": {"min": 4, "max":10},
         "max_epochs": {"value": 10},
         "gradient_clip_val": {"max": 1.5, "min": 0.1},
@@ -52,6 +53,7 @@ if __name__ == "__main__":
 
     if args.sweep_id is None:
         sweep_id = wandb.sweep(sweep_configuration, project="test_sweep")
+        print(sweep_id)
     else:
         sweep_id = args.sweep_id
     wandb.agent(sweep_id=sweep_id, function=train)

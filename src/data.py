@@ -71,6 +71,7 @@ class dataset(Dataset):
         word_level=False,
         use_addtional_corpus=False,
         sp_noise_std=None,
+        features_noise_std=None,
         gaussian_filter_sigma=0.8,
     ):
         self.debugging = debugging
@@ -82,6 +83,8 @@ class dataset(Dataset):
         self.gaussian_filter_sigma = gaussian_filter_sigma
 
         self.sp_noise_std = sp_noise_std
+
+        self.features_noise_std = features_noise_std
 
         if data_dir is None:
             return
@@ -224,6 +227,13 @@ class dataset(Dataset):
 
         # block normalization
         spikePow = (spikePow - block_mean) / block_std
+
+        if self.features_noise_std:
+            noise = np.random.normal(
+                loc=0, scale=self.features_noise_std, size=256
+            ).astype("float32")
+
+            spikePow += noise
 
         # smoothing
         sigma = 0.8
@@ -412,7 +422,8 @@ class B2T_DataModule(L.LightningDataModule):
         test_data_dir="./dataset/test",
         word_level=False,
         use_addtional_corpus=False,
-        sp_noise_std=0.2,
+        sp_noise_std=None,
+        features_noise_std=None,
         gaussian_filter_sigma=0.8,
         debugging=False,
         train_batch_size=4,
@@ -440,6 +451,8 @@ class B2T_DataModule(L.LightningDataModule):
 
         self.add_noises = add_noises
 
+        self.features_noise_std = features_noise_std
+
     def setup(self, stage: str):
 
         self.train_dataset = dataset(
@@ -451,6 +464,7 @@ class B2T_DataModule(L.LightningDataModule):
             has_label=True,
             use_addtional_corpus=self.use_addtional_corpus,
             gaussian_filter_sigma=self.gaussian_filter_sigma,
+            features_noise_std=self.features_noise_std
         )
 
         self.val_dataset = dataset(
