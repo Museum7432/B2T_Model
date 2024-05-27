@@ -42,7 +42,7 @@ def train(config=None, project_name="sweep", save_ckpt=False):
 
     wandb_logger = WandbLogger(project=project_name)
 
-    wandb_logger.watch(model)
+    # wandb_logger.watch(model)
 
     trainer = L.Trainer(
         accelerator="gpu",
