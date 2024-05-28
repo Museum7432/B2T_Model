@@ -227,20 +227,22 @@ class feature_extractor(L.LightningModule):
         conv_kernel2=3,
         conv_g1=256,
         conv_g2=1,
+        layers=None
     ):
         super(feature_extractor, self).__init__()
 
         self.output_dims = output_dims
 
-        self.layers = [
-            ["unpack"],
-            ["conv", 256, conv_size, conv_kernel1, 2, conv_g1],
-            ["highway", conv_size, 2],
-            ["conv", conv_size, output_dims, conv_kernel2, 2, conv_g2],
-            ["highway", output_dims, 2],
-        ]
+        if layers is None:
+            layers = [
+                ["unpack"],
+                ["conv", 256, conv_size, conv_kernel1, 2, conv_g1],
+                ["highway", conv_size, 2],
+                ["conv", conv_size, output_dims, conv_kernel2, 2, conv_g2],
+                ["highway", output_dims, 2],
+            ]
 
-        self.extractor = modules_stack(self.layers)
+        self.extractor = modules_stack(layers)
 
     def forward(self, spikePow, spikePow_lens):
         hidden_states, output_lens = self.extractor(spikePow, spikePow_lens)
@@ -272,10 +274,11 @@ class B2T_Model(L.LightningModule):
         weight_decay=0.1,
         eps=1e-08,
         lr_warmup_perc=0.1,  # lr warmup for the first 10% of the training
+        fe_layers=None,
         **other_args,
     ):
         super(B2T_Model, self).__init__()
-        # self.save_hyperparameters()
+        self.save_hyperparameters()
 
         self.peak_lr = peak_lr
         self.last_lr = last_lr
@@ -294,6 +297,7 @@ class B2T_Model(L.LightningModule):
             conv_kernel2=conv_kernel2,
             conv_g1=conv_g1,
             conv_g2=conv_g2,
+            layers=fe_layers
         )
 
         self.encoder = modules_stack(
@@ -381,7 +385,7 @@ class B2T_Model(L.LightningModule):
         logdir = self.trainer.log_dir
         for k in self.decoders.keys():
             # erase the file
-            open(os.path.join(logdir, f"valid_{k}.txt"), "w").close()
+            open(f"valid_{k}.txt", "w").close()
 
     def validation_step(self, batch):
         logdir = self.trainer.log_dir
@@ -418,7 +422,7 @@ class B2T_Model(L.LightningModule):
 
             target = self.decoders[k].get_target_text(batch)
 
-            with open(os.path.join(logdir, f"valid_{k}.txt"), "a") as txt_file:
+            with open(f"valid_{k}.txt", "a") as txt_file:
                 for i in range(len(text)):
                     txt_file.write(f"{raw_text[i]}\n{text[i]}\n{target[i]}\n\n")
 
@@ -430,7 +434,7 @@ class B2T_Model(L.LightningModule):
         for k in self.decoders.keys():
             preds = []
             target = []
-            with open(os.path.join(logdir, f"valid_{k}.txt"), "r") as fp:
+            with open(f"valid_{k}.txt", "r") as fp:
                 # 0 raw_text
                 # 1 text
                 # 2 target

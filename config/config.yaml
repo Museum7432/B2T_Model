@@ -1,0 +1,27 @@
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S}
+
+defaults:
+  - _self_
+  - model: baseline
+
+# absolute path to checkpoint needed
+from_ckpt: 0
+
+seed: 49
+
+experiment_name: "B2T"
+wandb: false
+
+float32_matmul_precision: "medium"
+trainer:
+  accelerator: "gpu"
+  # devices: 1
+  # precision: "32-true"
+  # accumulate_grad_batches: 1
+  val_check_interval: 0.1
+  max_epochs: 10
+  gradient_clip_val: 1.0

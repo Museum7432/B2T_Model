@@ -18,9 +18,12 @@ def train(config=None, project_name="sweep", save_ckpt=False):
     torch.set_float32_matmul_precision("medium")
     L.seed_everything(49, workers=True)
 
+    wandb_logger = WandbLogger(project=project_name)
+
+    tb = TensorBoardLogger("tb_logs", default_hp_metric=False)
+
     if config is None:
-        wandb.init(project="sweep")
-        config = wandb.config
+        config = wandb_logger.experiment.config
 
     # load datamodule
     data_module = B2T_DataModule(**config)
@@ -40,7 +43,6 @@ def train(config=None, project_name="sweep", save_ckpt=False):
         callbacks.append(checkpoint_callback)
 
 
-    wandb_logger = WandbLogger(project=project_name)
 
     # wandb_logger.watch(model)
 
@@ -49,7 +51,7 @@ def train(config=None, project_name="sweep", save_ckpt=False):
         val_check_interval=config["val_check_interval"],
         max_epochs=config["max_epochs"],
         gradient_clip_val=config["gradient_clip_val"],
-        logger=[wandb_logger],
+        logger=[wandb_logger, tb],
         callbacks=callbacks,
         enable_checkpointing=save_ckpt
     )
