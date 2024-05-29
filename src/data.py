@@ -92,6 +92,7 @@ class dataset(Dataset):
         if use_addtional_corpus:
             # text extract from the people_speech dataset
             # force the model to learn grammar
+            # not working yet
             self.addtional_corpus_path = os.path.join(data_dir, "people_speech.npy")
 
         # self.spikePows = np.load(os.path.join(data_dir, "spikePows.npy"),mmap_mode="r")
@@ -213,13 +214,7 @@ class dataset(Dataset):
 
         # spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
 
-        if self.sp_noise_std is not None and self.sp_noise_std != 0:
-            # noise_std = np.random.rand() * 0.25
-            # noise = np.random.normal(
-            #     loc=1, scale=noise_std, size=spikePow.shape
-            # ).astype("float32")
-            # spikePow = spikePow * noise
-
+        if self.add_noises and self.sp_noise_std and np.random.rand() < 0.75:
             noise = np.random.normal(
                 loc=1, scale=self.sp_noise_std, size=spikePow.shape
             ).astype("float32")
@@ -228,7 +223,7 @@ class dataset(Dataset):
         # block normalization
         spikePow = (spikePow - block_mean) / block_std
 
-        if self.features_noise_std:
+        if self.add_noises and self.features_noise_std and np.random.rand() < 0.75:
             noise = np.random.normal(
                 loc=0, scale=self.features_noise_std, size=256
             ).astype("float32")
@@ -246,8 +241,6 @@ class dataset(Dataset):
             )
         # spikePow = scipy.signal.savgol_filter(spikePow, 20, 2, axis=0)
 
-        # if self.add_noises and np.random.rand() < 0.15:
-        #     spikePow, sentenceText, phonemizedText = flip_(spikePow, sentenceText, phonemizedText)
 
         # if self.add_noises:
         #     # add more noises
@@ -473,7 +466,6 @@ class B2T_DataModule(L.LightningDataModule):
             debugging=self.debugging,
             word_level=False,
             add_noises=False,
-            sp_noise_std=None,
             gaussian_filter_sigma=self.gaussian_filter_sigma,
         )
 
@@ -483,7 +475,6 @@ class B2T_DataModule(L.LightningDataModule):
             debugging=self.debugging,
             word_level=False,
             add_noises=False,
-            sp_noise_std=None,
             gaussian_filter_sigma=self.gaussian_filter_sigma,
         )
 

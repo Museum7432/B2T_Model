@@ -12,6 +12,10 @@ def unpack(packed_hidden_states, cu_seqlens):
     seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
 
     packed_hidden_states = packed_hidden_states.squeeze(0)
+    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
+
+    pad_index = packed_hidden_states.size(0)
+    packed_hidden_states = F.pad(packed_hidden_states, (0, 0, 0, 1))
 
     ori_indices = (
         torch.arange(seq_len, device=cu_seqlens.device)
@@ -19,9 +23,11 @@ def unpack(packed_hidden_states, cu_seqlens):
         .expand((batch_size, seq_len))
     )
 
-    ori_indices = (ori_indices + cu_seqlens[:-1].unsqueeze(1)) % (
-        len(packed_hidden_states)
-    )
+    mask = ori_indices >= seq_len_list.unsqueeze(1)
+
+    ori_indices = (ori_indices + cu_seqlens[:-1].unsqueeze(1)) % pad_index
+
+    ori_indices = torch.where(mask, pad_index, ori_indices)
 
     return packed_hidden_states[ori_indices]
 
@@ -85,7 +91,7 @@ def reverse_hidden_states(hidden_states, seq_lens):
 def stochastic_update(new_state, old_state, mask=None, update_probs=None):
     # batch_size, seq_len, hidden_size
 
-    if mask is None and (update_probs is None or update_probs==1):
+    if mask is None and (update_probs is None or update_probs == 1):
         return new_state, mask
 
     if old_state is None:

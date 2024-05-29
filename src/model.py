@@ -116,14 +116,25 @@ class modules_stack(L.LightningModule):
 
 
 class CTC_decoder(L.LightningModule):
-    def __init__(self, input_dims=512, n_layer=5, phoneme_rec=False, update_probs=0.7):
+    def __init__(
+        self,
+        input_dims=512,
+        n_layer=5,
+        phoneme_rec=False,
+        update_probs=0.7,
+        layers=None,
+    ):
         super(CTC_decoder, self).__init__()
         self.phoneme_rec = phoneme_rec
         self.input_dims = input_dims
 
         self.update_probs = update_probs
 
-        self.layers = [["mamba", input_dims, n_layer, True, update_probs]]
+        self.layers = (
+            [["mamba", input_dims, n_layer, True, update_probs]]
+            if layers is None
+            else layers
+        )
 
         self.encoder = modules_stack(self.layers)
 
@@ -227,7 +238,7 @@ class feature_extractor(L.LightningModule):
         conv_kernel2=3,
         conv_g1=256,
         conv_g2=1,
-        layers=None
+        layers=None,
     ):
         super(feature_extractor, self).__init__()
 
@@ -275,6 +286,8 @@ class B2T_Model(L.LightningModule):
         eps=1e-08,
         lr_warmup_perc=0.1,  # lr warmup for the first 10% of the training
         fe_layers=None,
+        en_layers=None,
+        de_layers=None,
         **other_args,
     ):
         super(B2T_Model, self).__init__()
@@ -297,11 +310,13 @@ class B2T_Model(L.LightningModule):
             conv_kernel2=conv_kernel2,
             conv_g1=conv_g1,
             conv_g2=conv_g2,
-            layers=fe_layers
+            layers=fe_layers,
         )
 
         self.encoder = modules_stack(
             [["mamba", hidden_size, encoder_n_layer, True, update_probs]]
+            if en_layers is None
+            else en_layers
         )
 
         dec = {}
@@ -313,6 +328,7 @@ class B2T_Model(L.LightningModule):
                 n_layer=decoder_n_layer,
                 phoneme_rec=d == "ph",
                 update_probs=update_probs,
+                layers=de_layers,
             )
             loss_weights[d] = al_loss_weight if d == "al" else 1 - al_loss_weight
 
@@ -329,6 +345,7 @@ class B2T_Model(L.LightningModule):
         if encoder_only:
             return hidden_states, output_lens
 
+        outputs = {}
         for k, d in self.decoders.items():
             outputs[k] = d(hidden_states, output_lens)
 
@@ -455,13 +472,11 @@ class B2T_Model(L.LightningModule):
 
         self.log("wer", total_wer, prog_bar=True)
 
+        valid_loss = self.trainer.callback_metrics["valid_loss"]
 
-        valid_loss = self.trainer.callback_metrics['valid_loss']
-        
-        score = total_wer + valid_loss/6
+        score = total_wer + valid_loss / 6
 
         self.log("score", score, prog_bar=True)
-
 
     def num_steps(self) -> int:
         """Get number of steps"""

@@ -1,15 +1,16 @@
+# swift-hill-136
 train_data_dir: "${hydra:runtime.cwd}/dataset/train"
 val_data_dir: "${hydra:runtime.cwd}/dataset/valid"
 test_data_dir: "${hydra:runtime.cwd}/dataset/test"
-train_batch_size: 4
+train_batch_size: 8
 valid_batch_size: 8
-num_workers: 4
+num_workers: 8
 debugging: false
 word_level: false
 use_addtional_corpus: false
 add_noises: true
 sp_noise_std: 0.1
-features_noise_std: 0.15
+features_noise_std: 0.1
 gaussian_filter_sigma: 0.8
 # model config
 fe_layers:
@@ -17,19 +18,14 @@ fe_layers:
   - ["conv", 256, 1024, 7, 2, 256]
   - ["highway", 1024, 2]
   - ["conv", 1024, 768, 3, 2, 1]
-  - ["highway", 768, 2]
-
-en_layers:
-  - ["mamba", 768, 6, True, 1]
-
-de_layers:
-  - ["mamba", 768, 4, True, 1]
+  # - ["highway", 768, 2]
 
 hidden_size: 768
-
+encoder_n_layer: 6
+decoder_n_layer: 4
 update_probs: 1
-al_loss_weight: 0.6
-peak_lr: 1e-4
+al_loss_weight: 0.5
+peak_lr: 3e-4
 last_lr: 1e-6
 beta_1: 0.9
 beta_2: 0.95

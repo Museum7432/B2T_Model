@@ -30,7 +30,6 @@ def main(config: DictConfig):
         os.path.join(working_dir, ".hydra/data.py")
     )
 
-    print(f"The current working directory is {working_dir}")
 
     if config.get("seed"):
         L.seed_everything(config.seed, workers=True)
@@ -62,6 +61,7 @@ def main(config: DictConfig):
         artifact.add_dir(local_path="./.hydra")
         wdb.experiment.log_artifact(artifact)
 
+    print(f"The current working directory is {working_dir}")
 
     tb = TensorBoardLogger(save_dir="./", name="", default_hp_metric=False)
     loggers.append(tb)

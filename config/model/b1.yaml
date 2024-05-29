@@ -1,9 +1,9 @@
 train_data_dir: "${hydra:runtime.cwd}/dataset/train"
 val_data_dir: "${hydra:runtime.cwd}/dataset/valid"
 test_data_dir: "${hydra:runtime.cwd}/dataset/test"
-train_batch_size: 4
+train_batch_size: 8
 valid_batch_size: 8
-num_workers: 4
+num_workers: 8
 debugging: false
 word_level: false
 use_addtional_corpus: false
@@ -16,20 +16,20 @@ fe_layers:
   - ["unpack"]
   - ["conv", 256, 1024, 7, 2, 256]
   - ["highway", 1024, 2]
-  - ["conv", 1024, 768, 3, 2, 1]
-  - ["highway", 768, 2]
+  - ["conv", 1024, 512, 3, 2, 1]
+  - ["highway", 512, 2]
 
 en_layers:
-  - ["mamba", 768, 6, True, 1]
+  - ["mamba", 512, 7, True, 1]
 
 de_layers:
-  - ["mamba", 768, 4, True, 1]
+  - ["mamba", 512, 4, True, 1]
 
-hidden_size: 768
+hidden_size: 512
 
 update_probs: 1
-al_loss_weight: 0.6
-peak_lr: 1e-4
+al_loss_weight: 0.5
+peak_lr: 3e-4
 last_lr: 1e-6
 beta_1: 0.9
 beta_2: 0.95
