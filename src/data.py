@@ -283,8 +283,8 @@ class dataset(Dataset):
 
         eos_id = len(vocab) - 1
 
-        tokenized = [1] + tokenized + [1, eos_id]
-        # tokenized = tokenized + [eos_id]
+        # tokenized = [1] + tokenized + [1, eos_id]
+        tokenized = tokenized + [1, eos_id]
 
         re["sent"] = sentenceText
 
@@ -295,8 +295,8 @@ class dataset(Dataset):
 
         ph_eos_id = len(phoneme_vocab) - 1
 
-        ph = [1] + ph + [1, ph_eos_id]
-        # ph = ph + [ph_eos_id]
+        # ph = [1] + ph + [1, ph_eos_id]
+        ph = ph + [1, ph_eos_id]
 
         re["phonemized"] = phonemizedText
         re["phonemize_ids"] = ph
