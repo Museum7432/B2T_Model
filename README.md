@@ -17,7 +17,7 @@ the dataset should be downloaded on first run. And for the sake of simplicity, i
 run `python train.py model=b1` to start the training. It should take 20 minute on a rtx 3060 (or 1 hour on my laptop with a gtx 1650).
 
 # result
-the raw output of the model achived by the training script (with greedy ctc decoder) on the validation set:
+the raw output of the model achieved with the training script (with greedy ctc decoder) on the validation set:
 wer|wer (phonemized version)
 --|--
 0.38|0.35
