@@ -5,6 +5,7 @@ from typing import Union
 
 from .others import reverse_hidden_states, stochastic_update
 
+
 @dataclass
 class MambaConfig:
     d_model: int = 2560
@@ -15,7 +16,7 @@ class MambaConfig:
     fused_add_norm: bool = True
     bidirectional: bool = False
     bidirectional_strategy: Union[str, None] = None
-    update_probs:float = 0.5
+    update_probs: float = 0.5
 
 
 import math
@@ -103,7 +104,9 @@ class Block(nn.Module):
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
             )
-        hidden_states = self.mixer(hidden_states,seq_lens=seq_lens, inference_params=inference_params)
+        hidden_states = self.mixer(
+            hidden_states, seq_lens=seq_lens, inference_params=inference_params
+        )
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
@@ -256,7 +259,7 @@ class MixerModel(nn.Module):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.residual_in_fp32 = residual_in_fp32
-        self.update_probs=update_probs
+        self.update_probs = update_probs
 
         # We change the order of residual and layer norm:
         # Instead of LN -> Attn / MLP -> Add, we do:
@@ -318,7 +321,9 @@ class MixerModel(nn.Module):
             )
 
             hidden_states, mask = stochastic_update(
-                new_state=n_hidden_states, old_state=hidden_states, update_probs=self.update_probs
+                new_state=n_hidden_states,
+                old_state=hidden_states,
+                update_probs=self.update_probs,
             )
             residual, _ = stochastic_update(
                 new_state=n_residual, old_state=residual, mask=mask
@@ -402,13 +407,20 @@ class MambaBlock(nn.Module):
         )
 
     def forward(
-        self, hidden_states, seq_lens, position_ids=None, inference_params=None, num_last_tokens=0
+        self,
+        hidden_states,
+        seq_lens,
+        position_ids=None,
+        inference_params=None,
+        num_last_tokens=0,
     ):
         """
         "position_ids" is just to be compatible with Transformer generation. We don't use it.
         num_last_tokens: if > 0, only return the logits for the last n tokens
         """
-        hidden_states = self.backbone(hidden_states,seq_lens=seq_lens, inference_params=inference_params)
+        hidden_states = self.backbone(
+            hidden_states, seq_lens=seq_lens, inference_params=inference_params
+        )
         if num_last_tokens > 0:
             hidden_states = hidden_states[:, -num_last_tokens:]
 
@@ -422,15 +434,16 @@ class mamba_block(nn.Module):
         self.input_dims = d_model
         self.output_dims = d_model
         self.update_probs = update_probs
-        
+
         self.model = MambaBlock(
             MambaConfig(
                 d_model=d_model,
                 n_layer=n_layer,
                 bidirectional=bidirectional,
-                update_probs=update_probs
+                update_probs=update_probs,
             )
         )
+
     def forward(self, hidden_states, input_lens):
         # cu_seqlens is not available in mamba yet
 

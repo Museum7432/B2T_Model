@@ -57,6 +57,8 @@ def train(config=None, project_name="sweep", save_ckpt=False):
     )
 
     trainer.fit(model, datamodule=data_module)
+    
+    
 
 
 if __name__ == "__main__":

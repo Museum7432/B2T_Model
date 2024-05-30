@@ -50,7 +50,7 @@ def main(config: DictConfig):
     # loggers
     loggers = []
 
-    if config.get("wandb") and config.wandb:
+    if config.get("wandb"):
         wdb = WandbLogger(
             project=config.experiment_name,
             settings=wandb.Settings(code_dir=original_cwd)
@@ -89,15 +89,20 @@ def main(config: DictConfig):
 
     # trainer.test(model, datamodule=data_module)
 
-    # trainer.test(ckpt_path="best", datamodule=data_module)
+    trainer.test(ckpt_path="best", datamodule=data_module)
 
-    # if config.get("wandb") and config.wandb:
-    #     artifact = wandb.Artifact(name="backup", type="configs")
-    #     # artifact.add_file(local_path="./valid.txt")
-    #     # artifact.add_file(local_path="./test.txt")
-    #     artifact.add_dir(local_path="./.hydra")
+    if config.get("wandb"):
+        artifact = wandb.Artifact(name="emissions", type="test")
 
-    #     wdb.experiment.log_artifact(artifact)
+        artifact.add_file(
+            local_path="./test_emissions.npy", name="test_emission"
+        )
+
+        artifact.add_file(
+            local_path="./val_emissions.npy", name="val_emission"
+        )
+
+        wdb.experiment.log_artifact(artifact)
 
 
 if __name__ == "__main__":

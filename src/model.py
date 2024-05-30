@@ -396,14 +396,13 @@ class B2T_Model(L.LightningModule):
         return loss
 
     def on_validation_epoch_start(self):
-        logdir = self.trainer.log_dir
+        self.val_emissions = {}
+        self.val_labels = {}
         for k in self.decoders.keys():
-            # erase the file
-            open(f"valid_{k}.txt", "w").close()
+            self.val_emissions[k] = []
+            self.val_labels[k] = []
 
     def validation_step(self, batch):
-        logdir = self.trainer.log_dir
-
         items = self.calc_loss(batch)
 
         loss = 0
@@ -419,47 +418,39 @@ class B2T_Model(L.LightningModule):
         self.log("valid_loss", loss, batch_size=len(batch["spikePow"]), prog_bar=True)
 
         for k, output in items.items():
+            logits = output["logits"].cpu().numpy()
+            output_lens = output["output_lens"].cpu().numpy()
 
-            output_lens = output["output_lens"].cpu().tolist()
+            outputs_logits = [lo[:le] for lo, le in zip(logits, output_lens)]
+            self.val_emissions[k] += outputs_logits
 
+            self.val_labels[k] += self.decoders[k].get_target_text(batch)
+
+    def on_validation_epoch_end(self):
+
+        total_wer = 0
+
+        np.save("val_emissions.npy", self.val_emissions)
+        
+        for k in self.decoders.keys():
+
+            logits = self.val_emissions[k]
             # greedy decode
-            ids = output["logits"].argmax(dim=-1).cpu().tolist()
+            ids = [np.argmax(s, axis=-1) for s in logits]
 
-            text = []
-            raw_text = []
-
-            text = self.decoders[k].batch_decode(ids, output_lens=output_lens)
+            text = self.decoders[k].batch_decode(ids)
 
             raw_text = self.decoders[k].batch_decode(
-                ids, output_lens=output_lens, raw_ouput=True
+                ids, raw_ouput=True
             )
 
-            target = self.decoders[k].get_target_text(batch)
+            target = self.val_labels[k]
 
             with open(f"valid_{k}.txt", "a") as txt_file:
                 for i in range(len(text)):
                     txt_file.write(f"{raw_text[i]}\n{text[i]}\n{target[i]}\n\n")
 
-    def on_validation_epoch_end(self):
-        logdir = self.trainer.log_dir
-
-        total_wer = 0
-
-        for k in self.decoders.keys():
-            preds = []
-            target = []
-            with open(f"valid_{k}.txt", "r") as fp:
-                # 0 raw_text
-                # 1 text
-                # 2 target
-                # 3 newline
-                for idx, l in enumerate(fp):
-                    if idx % 4 == 1:
-                        preds.append(l)
-                    if idx % 4 == 2:
-                        target.append(l)
-
-            wer = torchmetrics.functional.text.word_error_rate(preds, target)
+            wer = torchmetrics.functional.text.word_error_rate(text, target)
 
             total_wer += wer
 
@@ -474,6 +465,34 @@ class B2T_Model(L.LightningModule):
         score = total_wer + valid_loss / 6
 
         self.log("score", score, prog_bar=True)
+
+        self.val_emissions = {}
+        self.val_labels = {}
+
+    def on_test_epoch_start(self):
+        self.test_emissions = {}
+        for k in self.decoders.keys():
+            self.test_emissions[k] = []
+
+    def test_step(self, batch):
+        # log the emission
+        outputs = self(
+            spikePow=batch["spikePow"],
+            spikePow_mask=batch["spikePow_mask"],
+            spikePow_lens=batch["spikePow_lens"],
+        )
+
+        for k in self.decoders.keys():
+            logits = outputs[k]["logits"].cpu().numpy()
+            output_lens = outputs[k]["output_lens"].cpu().numpy()
+
+            outputs_logits = [lo[:le] for lo, le in zip(logits, output_lens)]
+
+            self.test_emissions[k] += outputs_logits
+
+    def on_test_epoch_end(self):
+        np.save("test_emissions.npy", self.test_emissions)
+        self.test_emissions = {}
 
     def num_steps(self) -> int:
         """Get number of steps"""

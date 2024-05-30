@@ -5,6 +5,8 @@ from typing import Union
 
 from torch.nn import functional as F
 
+from .others import unpack, pack
+
 
 @dataclass
 class MambaConfig:
@@ -38,72 +40,6 @@ try:
     from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
-
-
-"""
-unpack function: convert packed_hidden_states (batch_size=1) to hidden_states
-"""
-
-
-def unpack(packed_hidden_states, cu_seqlens):
-    batch_size = cu_seqlens.shape[0] - 1
-    seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
-
-    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
-
-    packed_hidden_states = packed_hidden_states.squeeze(0)
-
-    ori_indices = torch.arange(batch_size* seq_len, device=cu_seqlens.device).reshape((batch_size, seq_len))
-
-    indices_offset = seq_len - seq_len_list
-
-    last_offset = indices_offset[-1].item()
-
-    indices_offset[-1] = 0
-
-    flatten_indices_offset = indices_offset.roll(1).cumsum(0)
-    ori_indices = ori_indices - flatten_indices_offset.unsqueeze(1)
-    
-    # pad packed_hidden_states
-    packed_hidden_states = F.pad(packed_hidden_states, pad=(0, 0, 0, last_offset))
-    return packed_hidden_states[ori_indices]
-
-"""
-pack function: convert hidden_states to packed_hidden_states (batch_size=1)
-"""
-
-
-def pack(hidden_states, cu_seqlens):
-    batch_size, seq_len, hidden_dim = hidden_states.shape
-    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
-    seq_len_list_3d = seq_len_list.unsqueeze(1).unsqueeze(2)
-    indices_3d = (
-        torch.arange(seq_len, device=hidden_states.device)
-        .unsqueeze(0)
-        .unsqueeze(2)
-        .repeat(batch_size, 1, hidden_dim)
-    )
-    mask_3d = indices_3d < seq_len_list_3d
-    packed_hidden_states = hidden_states[mask_3d].view(-1, hidden_dim)
-    return packed_hidden_states
-
-
-def pack2d(input_ids, cu_seqlens):
-    batch_size, seq_len = input_ids.shape
-
-    seq_len_list = cu_seqlens[1:] - cu_seqlens[:-1]
-
-    seq_len_list_2d = seq_len_list.unsqueeze(1)
-
-    indices_2d = (
-        torch.arange(seq_len, device=input_ids.device)
-        .unsqueeze(0)
-        .repeat(batch_size, 1)
-    )
-
-    mask_2d = indices_2d < seq_len_list_2d
-    packed_input_ids = input_ids[mask_2d].view(-1)
-    return packed_input_ids
 
 
 class Block(nn.Module):
@@ -359,7 +295,7 @@ class MixerModel(nn.Module):
         super().__init__()
         self.residual_in_fp32 = residual_in_fp32
 
-        self.update_probs=update_probs
+        self.update_probs = update_probs
 
         # We change the order of residual and layer norm:
         # Instead of LN -> Attn / MLP -> Add, we do:
@@ -420,7 +356,9 @@ class MixerModel(nn.Module):
                 inference_params=inference_params,
             )
             hidden_states, mask = stochastic_update(
-                new_state=n_hidden_states, old_state=hidden_states, update_probs=self.update_probs
+                new_state=n_hidden_states,
+                old_state=hidden_states,
+                update_probs=self.update_probs,
             )
             residual, _ = stochastic_update(
                 new_state=n_residual, old_state=residual, mask=mask
@@ -438,7 +376,6 @@ class MixerModel(nn.Module):
             #     hidden_states = n_hidden_states
 
             #     residual = n_residual
-
 
         if not self.fused_add_norm:
             residual = (
@@ -483,7 +420,6 @@ class MambaBlock(nn.Module):
         bidirectional = config.bidirectional
         bidirectional_strategy = config.bidirectional_strategy
         update_probs = config.update_probs
-
 
         factory_kwargs = {"device": device, "dtype": dtype}
 
@@ -555,7 +491,7 @@ class mamba_block_for_input_ids(nn.Module):
                 d_model=d_model,
                 n_layer=n_layer,
                 bidirectional=bidirectional,
-                update_probs=update_probs
+                update_probs=update_probs,
             )
         )
 
@@ -602,7 +538,7 @@ class mamba_block(nn.Module):
                 d_model=d_model,
                 n_layer=n_layer,
                 bidirectional=bidirectional,
-                update_probs=update_probs
+                update_probs=update_probs,
             )
         )
 
