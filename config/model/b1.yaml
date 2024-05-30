@@ -8,8 +8,8 @@ debugging: false
 word_level: false
 use_addtional_corpus: false
 add_noises: true
-sp_noise_std: 0.2
-features_noise_std: 0.0
+sp_noise_std: 0.1
+features_noise_std: 0.1
 gaussian_filter_sigma: 0.8
 # model config
 fe_layers:

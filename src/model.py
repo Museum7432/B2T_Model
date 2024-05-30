@@ -178,9 +178,6 @@ class CTC_decoder(L.LightningModule):
             labels = batch["sent_ids"]
             label_lens = batch["sent_ids_len"]
 
-        # remove the eos token
-        label_lens -= 1
-
         loss = F.ctc_loss(
             output["logits"].transpose(0, 1),
             labels,

@@ -39,9 +39,6 @@ def download_files():
             wget.download(gd_id, output_path)
 
 
-download_files()
-
-
 # require "festival" to be installed
 
 # el, em, en, pau not found in trainning dataset
@@ -145,3 +142,79 @@ correct_pos = np.array(
 
 def correct_channels(spikePow):
     return spikePow[:, correct_pos]
+
+
+# copy from https://github.com/cffan/neural_seq_decoder/blob/master/notebooks/formatCompetitionData.ipynb
+
+from g2p_en import G2p
+import numpy as np
+
+g2p = G2p()
+PHONE_DEF = [
+    "AA",
+    "AE",
+    "AH",
+    "AO",
+    "AW",
+    "AY",
+    "B",
+    "CH",
+    "D",
+    "DH",
+    "EH",
+    "ER",
+    "EY",
+    "F",
+    "G",
+    "HH",
+    "IH",
+    "IY",
+    "JH",
+    "K",
+    "L",
+    "M",
+    "N",
+    "NG",
+    "OW",
+    "OY",
+    "P",
+    "R",
+    "S",
+    "SH",
+    "T",
+    "TH",
+    "UH",
+    "UW",
+    "V",
+    "W",
+    "Y",
+    "Z",
+    "ZH",
+]
+PHONE_DEF_SIL = PHONE_DEF + ["SIL"]
+
+
+def phoneToId(p):
+    return PHONE_DEF_SIL.index(p)
+
+
+def g2p_phonemize(texts):
+    return ["|".join(g2p(t)) for t in texts]
+
+
+def g2p_tokenize(text):
+    # input:
+    # cat is the best
+    # K|AE1|T| |IH1|Z| |DH|AH0| |B|EH1|S|T
+
+    text = text.split("|")
+
+    text = [ t if t != " " else 'SIL' for t in text]
+
+    return [phoneToId(c) for c in tokens]
+
+def g2p_decode(ids, remove_consecutive=False):
+    if remove_consecutive:
+        ids = [i for i, _ in itertools.groupby(ids)]
+
+    return "".join([PHONE_DEF_SIL[i] for i in ids])

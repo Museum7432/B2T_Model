@@ -12,6 +12,7 @@ from src.utils import (
     clean_text,
     tokenize,
     correct_channels,
+    download_files
 )
 
 
@@ -80,6 +81,16 @@ def fix_text(text):
     return cl_text
 
 
+def get_features(tx1_block, spikePow_block):
+    tx1 = np.vstack(tx1_block)
+    spikePow = np.vstack(spikePow_block)
+
+    features = np.concatenate([tx1[:,0:128], spikePow[:,0:128]], axis=1)
+
+    # features = spikePow
+
+    return features
+
 def load_file(path, has_labels=True):
     data = sio.loadmat(path)
     # sentenceText spikePow blockIdx
@@ -95,7 +106,9 @@ def load_file(path, has_labels=True):
         selected_ids = data["blockIdx"].squeeze() == b_idx
 
         spikePow_block = data["spikePow"][0][selected_ids]
-        spikePow_block = [correct_channels(i) for i in spikePow_block]
+        tx1_block = data["tx1"][0][selected_ids]
+
+        # spikePow_block = [correct_channels(i) for i in spikePow_block]
         
         # spikePow_block = [np.sqrt(i) for i in spikePow_block]
 
@@ -104,10 +117,12 @@ def load_file(path, has_labels=True):
         spikePow_block_start_indices = np.cumsum(spikePow_block_lens[:-1])
 
         # block normalization
-        features = np.vstack(spikePow_block)
+        features = get_features(tx1_block, spikePow_block)
 
-        _mean = np.median(features, axis=0)
-        _std = np.median(np.abs(features - _mean), axis=0)
+        # _mean = np.median(features, axis=0)
+        # _std = np.median(np.abs(features - _mean), axis=0)
+        _mean = np.mean(features, axis=0)
+        _std = np.std(features, axis=0)
 
         features = filter_noises(features, _mean, _std, ep=1e-8)
 

@@ -212,23 +212,10 @@ class dataset(Dataset):
             sentenceText = self.sentenceTexts[idx].replace(" ", "|")
             phonemizedText = self.phonemizedTexts[idx].replace(" ", "|")
 
-        # spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
-
-        if self.add_noises and self.sp_noise_std and np.random.rand() < 0.75:
-            noise = np.random.normal(
-                loc=1, scale=self.sp_noise_std, size=spikePow.shape
-            ).astype("float32")
-            spikePow = spikePow * noise
-
         # block normalization
-        spikePow = (spikePow - block_mean) / block_std
+        spikePow = (spikePow - block_mean) / (block_std + + 1e-8)
 
-        if self.add_noises and self.features_noise_std and np.random.rand() < 0.75:
-            noise = np.random.normal(
-                loc=0, scale=self.features_noise_std, size=256
-            ).astype("float32")
-
-            spikePow += noise
+        # spikePow = filter_noises(spikePow, block_mean, block_std, ep=1e-8)
 
         # smoothing
         sigma = 0.8
@@ -240,6 +227,21 @@ class dataset(Dataset):
                 spikePow, self.gaussian_filter_sigma, axis=0
             )
         # spikePow = scipy.signal.savgol_filter(spikePow, 20, 2, axis=0)
+
+        if self.add_noises and self.sp_noise_std and np.random.rand() < 0.75:
+            noise = np.random.normal(
+                loc=0, scale=self.sp_noise_std, size=spikePow.shape
+            ).astype("float32")
+
+            spikePow += noise
+
+        if self.add_noises and self.features_noise_std and np.random.rand() < 0.75:
+            noise = np.random.normal(
+                loc=0, scale=self.features_noise_std, size=256
+            ).astype("float32")
+
+            spikePow += noise
+
 
 
         # if self.add_noises:
@@ -281,10 +283,8 @@ class dataset(Dataset):
 
         tokenized = tokenize(sentenceText)
 
-        eos_id = len(vocab) - 1
-
         # tokenized = [1] + tokenized + [1, eos_id]
-        tokenized = tokenized + [1, eos_id]
+        tokenized = tokenized + [1]
 
         re["sent"] = sentenceText
 
@@ -293,10 +293,8 @@ class dataset(Dataset):
 
         ph = phonetic_tokenize(phonemizedText)
 
-        ph_eos_id = len(phoneme_vocab) - 1
-
         # ph = [1] + ph + [1, ph_eos_id]
-        ph = ph + [1, ph_eos_id]
+        ph = ph + [1]
 
         re["phonemized"] = phonemizedText
         re["phonemize_ids"] = ph
