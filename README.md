@@ -23,4 +23,7 @@ wer|wer (phonemized version)
 0.38|0.35
 
 then using the CTC decoder with the 4-gram kenlm model provide by the PyTorch [tutorial](https://pytorch.org/audio/main/tutorials/asr_inference_with_ctc_decoder_tutorial.html#sphx-glr-tutorials-asr-inference-with-ctc-decoder-tutorial-py) will give you a wer of 24% (or 18.8% on the test set).
+
+14th place!. Which is quite obvious since there's just me working on this project. There are still multiple ideas i could try but since free time is quite limited as a college student so if someone is interested, you could fork this project. 
 # work in progress
+* use additional corpus: inspired by the GAN network, basically train a separate encoder that project text into the same latent space as the output of the encoder by making the decoder (with gradient off) ouput the disired text. then a second decoder is train with the second enocder ouput (detached). In theory, the decoder should learn how to spell better due to the addtional data but in practice the second loss converge way too fast before anything of use was learn, so tunning the loss weight could word. There should be a (not) working prototype of this idea in the `src` folder.
